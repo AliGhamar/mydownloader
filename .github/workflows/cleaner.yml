@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'همه فایلهای دانلود شده پاک شه ? (تایپ کنید "yes" برای ادامه ی عملیات)'
+        description: 'برای حذف همه ی فایلهای دانلود شده از گیتهابتون توی کادر پایین yes بنویسید و بزنید پاک بشه'
         required: true
         default: 'no'
 
