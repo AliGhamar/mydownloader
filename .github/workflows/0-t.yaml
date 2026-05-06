@@ -183,90 +183,62 @@ jobs:
           }
 
           split_file_into_parts() {
-                local INPUT_FILE="$1"
-                local OUTPUT_DIR="$2"
-                local BASENAME="$3"
-                local PASSWORD="$4"
-                local PART_SIZE_MB="$5"
-                
-                local FILE_SIZE=$(stat -c%s "$INPUT_FILE")
-                local FILE_SIZE_MB=$(( FILE_SIZE / 1024 / 1024 ))
-                
-                echo "Processing: $BASENAME (${FILE_SIZE_MB} MB)"
-                
-                if [ "$FILE_SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
-                  echo "File exceeds ${PART_SIZE_MB}MB - splitting into parts"
-                  
-                  # Create a temporary directory for split files
-                  local TEMP_DIR="${OUTPUT_DIR}/temp_split"
-                  mkdir -p "$TEMP_DIR"
-                  
-                  # First, create a zip (with or without password)
-                  local TEMP_ZIP="${TEMP_DIR}/${BASENAME}.zip"
-                  if [ -n "$PASSWORD" ]; then
-                    zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE"
-                  else
-                    zip -j "$TEMP_ZIP" "$INPUT_FILE"
-                  fi
-                  
-                  # Split the zip file using split command (creates files: xaa, xab, xac...)
-                  cd "$TEMP_DIR"
-                  split -b "${PART_SIZE_MB}M" "${BASENAME}.zip" "${BASENAME}.zip.part."
-                  
-                  # Rename parts and move them to OUTPUT_DIR
-                  local PART_NUM=1
-                  for part in ${BASENAME}.zip.part.*; do
-                    if [ -f "$part" ]; then
-                      # Format part number with 3 digits (001, 002, etc)
-                      printf -v PART_NUM_PADDED "%03d" $PART_NUM
-                      # Move the file to OUTPUT_DIR with new name
-                      mv "$part" "${OUTPUT_DIR}/${BASENAME}.zip.${PART_NUM_PADDED}"
-                      PART_NUM=$((PART_NUM + 1))
-                    fi
-                  done
-                  
-                  cd - > /dev/null
-                  
-                  # Clean up temp directory
-                  rm -rf "$TEMP_DIR"
-                  
-                  # Create a checksum file for verification
-                  {
-                    echo "# Checksums for ${BASENAME}"
-                    echo ""
-                    echo "## SHA256"
-                    echo ""
-                    for part_file in ${OUTPUT_DIR}/${BASENAME}.zip.*; do
-                      if [ -f "$part_file" ]; then
-                        PART_BASENAME=$(basename "$part_file")
-                        sha256sum "$part_file" | awk '{print $1}' | sed "s|^|${PART_BASENAME}: |"
-                      fi
-                    done
-                    echo ""
-                    echo "## Reassembly Instructions"
-                    echo ""
-                    echo "To reassemble the original zip file:"
-                    echo "\`\`\`bash"
-                    echo "cat ${BASENAME}.zip.* > ${BASENAME}.zip"
-                    echo "unzip ${BASENAME}.zip"
-                    echo "\`\`\`"
-                    echo ""
-                    if [ -n "$PASSWORD" ]; then
-                      echo "**Note:** The zip file is password protected. Use the password provided in the README."
-                    fi
-                  } > "${OUTPUT_DIR}/${BASENAME}_checksums.txt"
-                  
-                  echo "Created $(ls ${OUTPUT_DIR}/${BASENAME}.zip.* 2>/dev/null | wc -l) parts"
-                else
-                  # Small file - just zip it
-                  echo "File under ${PART_SIZE_MB}MB - creating single zip"
-                  if [ -n "$PASSWORD" ]; then
-                    zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
-                  else
-                    zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
-                  fi
+            local INPUT_FILE="$1"
+            local OUTPUT_DIR="$2"
+            local BASENAME="$3"
+            local PASSWORD="$4"
+            local PART_SIZE_MB="$5"
+            
+            local FILE_SIZE=$(stat -c%s "$INPUT_FILE")
+            local FILE_SIZE_MB=$(( FILE_SIZE / 1024 / 1024 ))
+            
+            echo "Processing: $BASENAME (${FILE_SIZE_MB} MB)"
+            
+            if [ "$FILE_SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
+              echo "File exceeds ${PART_SIZE_MB}MB - splitting into parts"
+              
+              # Create a temporary directory for split files
+              local TEMP_DIR="${OUTPUT_DIR}/temp_split"
+              mkdir -p "$TEMP_DIR"
+              
+              # First, create a zip (with or without password)
+              local TEMP_ZIP="${TEMP_DIR}/${BASENAME}.zip"
+              if [ -n "$PASSWORD" ]; then
+                zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE"
+              else
+                zip -j "$TEMP_ZIP" "$INPUT_FILE"
+              fi
+              
+              # Split the zip file using split command
+              cd "$TEMP_DIR"
+              split -b "${PART_SIZE_MB}M" "${BASENAME}.zip" "${BASENAME}.zip.part."
+              
+              # Move split parts to OUTPUT_DIR with proper naming
+              local PART_NUM=1
+              for part in ${BASENAME}.zip.part.*; do
+                if [ -f "$part" ]; then
+                  printf -v PART_NUM_PADDED "%03d" $PART_NUM
+                  mv "$part" "${OUTPUT_DIR}/${BASENAME}.zip.${PART_NUM_PADDED}"
+                  PART_NUM=$((PART_NUM + 1))
                 fi
-              }
+              done
+              
+              cd - > /dev/null
+              
+              # Clean up temp directory
+              rm -rf "$TEMP_DIR"
+              
+              echo "Created $(ls ${OUTPUT_DIR}/${BASENAME}.zip.* 2>/dev/null | wc -l) parts"
+            else
+              # Small file - just zip it
+              echo "File under ${PART_SIZE_MB}MB - creating single zip"
+              if [ -n "$PASSWORD" ]; then
+                zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+              else
+                zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+              fi
+            fi
+          }
 
           # Download torrent
           echo "Downloading torrent from: $MAGNET"
@@ -296,86 +268,34 @@ jobs:
               # Count parts
               PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/${ARCHIVE_NAME}.zip.* 2>/dev/null | wc -l)
               
-              # Create README.md for zip mode
+              # Create simple README.md for zip mode
               FOLDER_ENCODED=$(echo "${FOLDER_NAME}" | sed 's/ /%20/g')
               
               {
                 echo "# ${ARCHIVE_NAME} - Torrent Archive"
                 echo ""
-                echo "---"
-                echo ""
-                echo "## Download Information"
-                echo ""
-                echo "| Property | Value |"
-                echo "|----------|-------|"
-                echo "| **Archive Name** | \`${ARCHIVE_NAME}.zip\` |"
-                echo "| **Parts** | ${PARTS_COUNT} |"
-                echo "| **Status** | **Complete (100%)** |"
-                if [ -n "$ZIP_PASSWORD" ]; then
-                  echo "| **Password Protected** | **YES** |"
-                else
-                  echo "| **Password Protected** | **NO** |"
-                fi
-                echo ""
-                echo "---"
-                echo ""
                 echo "## Download Links"
                 echo ""
-                echo "| File | Link |"
-                echo "|------|------|"
-              } > "downloads/$FOLDER_NAME/README.md"
-              
-              # List all part files in order
-              for part_file in $(ls downloads/${FOLDER_NAME}/${ARCHIVE_NAME}.zip.* 2>/dev/null | sort); do
-                if [ -f "$part_file" ]; then
-                  PART_BASENAME=$(basename "$part_file")
-                  PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
-                  RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
-                  echo "| \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |" >> "downloads/$FOLDER_NAME/README.md"
-                fi
-              done
-              
-              # Add checksum file link if it exists
-              if [ -f "downloads/$FOLDER_NAME/${ARCHIVE_NAME}_checksums.txt" ]; then
-                CHECKSUM_ENCODED=$(echo "${ARCHIVE_NAME}_checksums.txt" | sed 's/ /%20/g')
-                echo "" >> "downloads/$FOLDER_NAME/README.md"
-                echo "| \`${ARCHIVE_NAME}_checksums.txt\` | [Checksums](${RAW_LINK%/*}/${CHECKSUM_ENCODED}) |" >> "downloads/$FOLDER_NAME/README.md"
-              fi
-              
-              {
-                echo ""
-                echo "---"
+                for part_file in $(ls downloads/${FOLDER_NAME}/${ARCHIVE_NAME}.zip.* 2>/dev/null | sort); do
+                  if [ -f "$part_file" ]; then
+                    PART_BASENAME=$(basename "$part_file")
+                    PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
+                    RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
+                    echo "- [${PART_BASENAME}](${RAW_LINK})" >> "downloads/$FOLDER_NAME/README.md"
+                  fi
+                done
                 echo ""
                 echo "## How to Reassemble"
                 echo ""
-                echo "**Linux/Mac:**"
                 echo "\`\`\`bash"
-                echo "# Download all parts to the same directory"
-                echo "# Then run:"
                 echo "cat ${ARCHIVE_NAME}.zip.* > ${ARCHIVE_NAME}.zip"
                 echo "unzip ${ARCHIVE_NAME}.zip"
-                echo "# Then extract the tar file:"
                 echo "tar -xf ${ARCHIVE_NAME}.tar"
                 echo "\`\`\`"
                 echo ""
-                echo "**Windows:**"
-                echo "1. Download all parts (001, 002, 003, etc.)"
-                echo "2. Open command prompt in the download folder"
-                echo "3. Run: \`copy /b ${ARCHIVE_NAME}.zip.* ${ARCHIVE_NAME}.zip\`"
-                echo "4. Extract using 7-Zip or WinRAR"
-                echo ""
                 echo "---"
-                echo ""
-                echo "## Original Magnet Link"
-                echo ""
-                echo "\`\`\`"
-                echo "$MAGNET"
-                echo "\`\`\`"
-                echo ""
-                echo "---"
-                echo ""
                 echo "*This tool created by [avasam.ir](https://avasam.ir)*"
-              } >> "downloads/$FOLDER_NAME/README.md"
+              } > "downloads/$FOLDER_NAME/README.md"
             fi
             rm -rf tmp_downloads
           else
@@ -388,90 +308,38 @@ jobs:
               
               split_file_into_parts "$FILE" "downloads/$FOLDER_NAME" "$BASENAME_NO_EXT" "$ZIP_PASSWORD" "$SPLIT_THRESHOLD_MB"
               
-              # Create README for this item
+              # Create simple README for this item
               FOLDER_ENCODED=$(echo "${FOLDER_NAME}" | sed 's/ /%20/g')
               
-              # Check if we have split parts or single file
-              if ls downloads/${FOLDER_NAME}/${BASENAME_NO_EXT}.zip.* 2>/dev/null | grep -q .; then
-                PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/${BASENAME_NO_EXT}.zip.* 2>/dev/null | wc -l)
-                FILE_TYPE="split"
-              else
-                PARTS_COUNT=1
-                FILE_TYPE="single"
-              fi
-              
               {
-                echo "# ${BASENAME} - Torrent Download"
-                echo ""
-                echo "---"
-                echo ""
-                echo "## Download Information"
-                echo ""
-                echo "| Property | Value |"
-                echo "|----------|-------|"
-                echo "| **Original File** | \`${BASENAME}\` |"
-                if [ "$FILE_TYPE" = "split" ]; then
-                  echo "| **Parts** | ${PARTS_COUNT} |"
-                else
-                  echo "| **Format** | Single zip file |"
-                fi
-                echo "| **Status** | **Complete (100%)** |"
-                if [ -n "$ZIP_PASSWORD" ]; then
-                  echo "| **Password Protected** | **YES** |"
-                else
-                  echo "| **Password Protected** | **NO** |"
-                fi
-                echo ""
-                echo "---"
+                echo "# ${BASENAME}"
                 echo ""
                 echo "## Download Links"
                 echo ""
-                echo "| File | Link |"
-                echo "|------|------|"
               } > "downloads/${FOLDER_NAME}/README.md"
               
-              if [ "$FILE_TYPE" = "split" ]; then
+              if ls downloads/${FOLDER_NAME}/${BASENAME_NO_EXT}.zip.* 2>/dev/null | grep -q .; then
                 for part_file in $(ls downloads/${FOLDER_NAME}/${BASENAME_NO_EXT}.zip.* 2>/dev/null | sort); do
-                  if [ -f "$part_file" ]; then
-                    PART_BASENAME=$(basename "$part_file")
-                    PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
-                    RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
-                    echo "| \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
-                  fi
+                  PART_BASENAME=$(basename "$part_file")
+                  PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
+                  RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
+                  echo "- [${PART_BASENAME}](${RAW_LINK})" >> "downloads/${FOLDER_NAME}/README.md"
                 done
-                # Add checksum file if it exists
-                if [ -f "downloads/$FOLDER_NAME/${BASENAME_NO_EXT}_checksums.txt" ]; then
-                  CHECKSUM_ENCODED=$(echo "${BASENAME_NO_EXT}_checksums.txt" | sed 's/ /%20/g')
-                  echo "| \`${BASENAME_NO_EXT}_checksums.txt\` | [Checksums](${RAW_LINK%/*}/${CHECKSUM_ENCODED}) |" >> "downloads/${FOLDER_NAME}/README.md"
-                fi
+                echo "" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "## How to Reassemble" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "\`\`\`bash" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "cat ${BASENAME_NO_EXT}.zip.* > ${BASENAME_NO_EXT}.zip" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "unzip ${BASENAME_NO_EXT}.zip" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "\`\`\`" >> "downloads/${FOLDER_NAME}/README.md"
               else
                 RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${BASENAME_NO_EXT}.zip"
-                echo "| \`${BASENAME_NO_EXT}.zip\` | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "- [${BASENAME_NO_EXT}.zip](${RAW_LINK})" >> "downloads/${FOLDER_NAME}/README.md"
               fi
               
-              {
-                echo ""
-                echo "---"
-                echo ""
-                if [ "$FILE_TYPE" = "split" ]; then
-                  echo "## How to Reassemble"
-                  echo ""
-                  echo "\`\`\`bash"
-                  echo "cat ${BASENAME_NO_EXT}.zip.* > ${BASENAME_NO_EXT}.zip"
-                  echo "unzip ${BASENAME_NO_EXT}.zip"
-                  echo "\`\`\`"
-                  echo ""
-                fi
-                echo "## Original Magnet Link"
-                echo ""
-                echo "\`\`\`"
-                echo "$MAGNET"
-                echo "\`\`\`"
-                echo ""
-                echo "---"
-                echo ""
-                echo "*This tool created by [avasam.ir](https://avasam.ir)*"
-              } >> "downloads/${FOLDER_NAME}/README.md"
+              echo "" >> "downloads/${FOLDER_NAME}/README.md"
+              echo "---" >> "downloads/${FOLDER_NAME}/README.md"
+              echo "*This tool created by [avasam.ir](https://avasam.ir)*" >> "downloads/${FOLDER_NAME}/README.md"
             done
             
             # Handle directories in normal mode
@@ -489,89 +357,39 @@ jobs:
               split_file_into_parts "$TEMP_TAR" "downloads/$FOLDER_NAME" "$DIRNAME" "$ZIP_PASSWORD" "$SPLIT_THRESHOLD_MB"
               rm -f "$TEMP_TAR"
               
-              # Create README
+              # Create simple README
               FOLDER_ENCODED=$(echo "${FOLDER_NAME}" | sed 's/ /%20/g')
               
-              if ls downloads/${FOLDER_NAME}/${DIRNAME}.zip.* 2>/dev/null | grep -q .; then
-                PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/${DIRNAME}.zip.* 2>/dev/null | wc -l)
-                FILE_TYPE="split"
-              else
-                PARTS_COUNT=1
-                FILE_TYPE="single"
-              fi
-              
               {
-                echo "# ${DIRNAME} - Torrent Download"
-                echo ""
-                echo "---"
-                echo ""
-                echo "## Download Information"
-                echo ""
-                echo "| Property | Value |"
-                echo "|----------|-------|"
-                echo "| **Original Directory** | \`${DIRNAME}\` |"
-                if [ "$FILE_TYPE" = "split" ]; then
-                  echo "| **Parts** | ${PARTS_COUNT} |"
-                else
-                  echo "| **Format** | Single zip file |"
-                fi
-                echo "| **Status** | **Complete (100%)** |"
-                if [ -n "$ZIP_PASSWORD" ]; then
-                  echo "| **Password Protected** | **YES** |"
-                else
-                  echo "| **Password Protected** | **NO** |"
-                fi
-                echo ""
-                echo "---"
+                echo "# ${DIRNAME}"
                 echo ""
                 echo "## Download Links"
                 echo ""
-                echo "| File | Link |"
-                echo "|------|------|"
               } > "downloads/${FOLDER_NAME}/README.md"
               
-              if [ "$FILE_TYPE" = "split" ]; then
+              if ls downloads/${FOLDER_NAME}/${DIRNAME}.zip.* 2>/dev/null | grep -q .; then
                 for part_file in $(ls downloads/${FOLDER_NAME}/${DIRNAME}.zip.* 2>/dev/null | sort); do
-                  if [ -f "$part_file" ]; then
-                    PART_BASENAME=$(basename "$part_file")
-                    PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
-                    RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
-                    echo "| \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
-                  fi
+                  PART_BASENAME=$(basename "$part_file")
+                  PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
+                  RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
+                  echo "- [${PART_BASENAME}](${RAW_LINK})" >> "downloads/${FOLDER_NAME}/README.md"
                 done
-                if [ -f "downloads/$FOLDER_NAME/${DIRNAME}_checksums.txt" ]; then
-                  CHECKSUM_ENCODED=$(echo "${DIRNAME}_checksums.txt" | sed 's/ /%20/g')
-                  echo "| \`${DIRNAME}_checksums.txt\` | [Checksums](${RAW_LINK%/*}/${CHECKSUM_ENCODED}) |" >> "downloads/${FOLDER_NAME}/README.md"
-                fi
+                echo "" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "## How to Reassemble" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "\`\`\`bash" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "cat ${DIRNAME}.zip.* > ${DIRNAME}.zip" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "unzip ${DIRNAME}.zip" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "tar -xf ${DIRNAME}.tar" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "\`\`\`" >> "downloads/${FOLDER_NAME}/README.md"
               else
                 RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${DIRNAME}.zip"
-                echo "| \`${DIRNAME}.zip\` | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
+                echo "- [${DIRNAME}.zip](${RAW_LINK})" >> "downloads/${FOLDER_NAME}/README.md"
               fi
               
-              {
-                echo ""
-                echo "---"
-                echo ""
-                if [ "$FILE_TYPE" = "split" ]; then
-                  echo "## How to Reassemble"
-                  echo ""
-                  echo "\`\`\`bash"
-                  echo "cat ${DIRNAME}.zip.* > ${DIRNAME}.zip"
-                  echo "unzip ${DIRNAME}.zip"
-                  echo "tar -xf ${DIRNAME}.tar"
-                  echo "\`\`\`"
-                  echo ""
-                fi
-                echo "## Original Magnet Link"
-                echo ""
-                echo "\`\`\`"
-                echo "$MAGNET"
-                echo "\`\`\`"
-                echo ""
-                echo "---"
-                echo ""
-                echo "*This tool created by [avasam.ir](https://avasam.ir)*"
-              } >> "downloads/${FOLDER_NAME}/README.md"
+              echo "" >> "downloads/${FOLDER_NAME}/README.md"
+              echo "---" >> "downloads/${FOLDER_NAME}/README.md"
+              echo "*This tool created by [avasam.ir](https://avasam.ir)*" >> "downloads/${FOLDER_NAME}/README.md"
             done
             
             rm -rf tmp_downloads
