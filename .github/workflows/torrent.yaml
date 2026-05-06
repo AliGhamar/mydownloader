@@ -1,424 +1,218 @@
-name: ⬇️ 01- Download from Torrent Magnet Link
 
-on:
-  workflow_dispatch:
-    inputs:
-      magnet_link:
-        description: 'Magnet Link (magnet:?xt=urn:btih:...)'
-        required: true
-        type: string
-      select_files:
-        description: 'Specific files to download (comma-separated names, leave empty for all)'
-        required: false
-        default: ''
-        type: string
-      password:
-        description: 'Password for zip files (optional)'
-        required: false
-        default: ''
-        type: string
+## Suggestions
 
-jobs:
-  download-torrent:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+- Try using a different torrent client locally
+- Check if the magnet link works in qBittorrent or Transmission
+- Some public trackers are blocked in CI environments
+- Consider using a seedbox or dedicated server for torrent downloads
 
-      - name: Install torrent client and dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            aria2 \
-            zip \
-            unzip \
-            python3 \
-            python3-pip
-          pip3 install libtorrent
-          echo "Installed aria2 with BitTorrent support"
+## Alternative Approach
 
-      - name: AVASAM Torrent Downloader - https://avasam.ir
-        run: |
-          echo "🏷️  AVASAM - Torrent Download Solution"
-          echo "🌐 https://avasam.ir"
-          echo "⚠️  Note: GitHub has 100MB file limit. Files will be split into 90MB parts."
-          echo "⚠️  Warning: Large torrents may timeout. Use for files under 1GB total."
+For reliable automated downloads, consider:
+1. Running your own download server with qBittorrent WebUI
+2. Using a VPS with persistent storage
+3. Setting up an RSS feed for automatic downloads
 
-      - name: Download torrent via aria2
-        run: |
-          MAGNET_LINK="${{ github.event.inputs.magnet_link }}"
-          SELECT_FILES="${{ github.event.inputs.select_files }}"
-          ZIP_PASSWORD="${{ github.event.inputs.password }}"
-          SPLIT_SIZE="90M"
-          
-          REPO_OWNER="${{ github.repository_owner }}"
-          REPO_NAME="${{ github.event.repository.name }}"
-          BRANCH="${GITHUB_REF_NAME}"
-
-          echo "AVASAM (https://avasam.ir) - Processing torrent download"
-          echo "Magnet link: ${MAGNET_LINK:0:100}..."
-          
-          mkdir -p torrent_download splitted_downloads
-
-          # Extract torrent hash from magnet link
-          TORRENT_HASH=$(echo "$MAGNET_LINK" | grep -oP 'btih:\K[a-fA-F0-9]+' | head -1)
-          if [ -z "$TORRENT_HASH" ]; then
-            TORRENT_HASH=$(echo "$MAGNET_LINK" | grep -oP 'urn:btih:\K[a-fA-F0-9]+' | head -1)
-          fi
-          
-          if [ -z "$TORRENT_HASH" ]; then
-            echo "ERROR: Could not extract torrent hash from magnet link"
-            exit 1
-          fi
-          
-          echo "Torrent hash: $TORRENT_HASH"
-
-          # Build select file parameter for aria2
-          SELECT_PARAM=""
-          if [ -n "$SELECT_FILES" ]; then
-            IFS=',' read -ra FILES <<< "$SELECT_FILES"
-            INDEX=1
-            for FILE in "${FILES[@]}"; do
-              SELECT_PARAM="$SELECT_PARAM --select-file=$INDEX"
-              echo "Will select file: $FILE (index $INDEX)"
-              INDEX=$((INDEX + 1))
-            done
-          fi
-
-          # Download torrent using aria2 (supports BitTorrent)
-          echo "Starting torrent download with aria2..."
-          aria2c \
-            --bt-metadata-only=false \
-            --bt-save-metadata=true \
-            --follow-torrent=true \
-            --seed-time=0 \
-            --max-connection-per-server=16 \
-            --split=16 \
-            --min-split-size=1M \
-            --max-concurrent-downloads=5 \
-            --max-overall-upload-limit=1K \
-            --download-limit=0 \
-            --timeout=60 \
-            --connect-timeout=60 \
-            --max-tries=0 \
-            --retry-wait=5 \
-            --max-file-not-found=10 \
-            --continue=true \
-            --dir="torrent_download" \
-            $SELECT_PARAM \
-            "$MAGNET_LINK" || true
-
-          # Also try with libtorrent (Python) if aria2 fails
-          if [ -z "$(ls -A torrent_download 2>/dev/null)" ]; then
-            echo "Aria2 didn't download files, trying Python libtorrent..."
-            cat > torrent_client.py << 'EOF'
-import libtorrent as lt
-import time
-import sys
-import os
-
-def download_torrent(magnet_link, save_path):
-    ses = lt.session()
-    ses.listen_on(6881, 6891)
-    
-    params = {
-        'save_path': save_path,
-        'storage_mode': lt.storage_mode_t.storage_mode_sparse,
-        'paused': False,
-        'auto_managed': True,
-        'duplicate_is_error': True
-    }
-    
-    handle = lt.add_magnet_uri(ses, magnet_link, params)
-    
-    print("Downloading metadata...")
-    while not handle.has_metadata():
-        time.sleep(1)
-    
-    print("Got metadata, starting download...")
-    torrent_info = handle.get_torrent_info()
-    print(f"Torrent name: {torrent_info.name()}")
-    
-    total_size = 0
-    for file in torrent_info.files():
-        total_size += file.size
-        print(f"  File: {file.path} ({file.size / 1024 / 1024:.2f} MB)")
-    
-    print(f"Total size: {total_size / 1024 / 1024:.2f} MB")
-    
-    # Wait for download completion
-    while True:
-        status = handle.status()
-        progress = status.progress * 100
-        print(f"\rProgress: {progress:.2f}% - Download: {status.download_rate / 1000:.0f} kB/s", end="")
-        
-        if status.is_seeding:
-            print("\nDownload complete!")
-            break
-        
-        if status.progress == 1.0:
-            print("\nDownload finished!")
-            break
-            
-        time.sleep(2)
-    
-    return torrent_info.name()
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("No magnet link provided")
-        sys.exit(1)
-    
-    magnet = sys.argv[1]
-    save_path = sys.argv[2] if len(sys.argv) > 2 else "torrent_download"
-    
-    download_torrent(magnet, save_path)
+*This tool created by [avasam.ir](https://avasam.ir)*
 EOF
-            python3 torrent_client.py "$MAGNET_LINK" "torrent_download" || true
-          fi
-
-          # Check if any files were downloaded
-          if [ -z "$(ls -A torrent_download 2>/dev/null)" ]; then
-            echo "ERROR: No files were downloaded. The torrent may be dead or unreachable."
-            exit 1
-          fi
-
-          echo "Download completed. Files in torrent_download:"
-          ls -la torrent_download/
-
-          # Calculate total size
-          TOTAL_SIZE=$(du -sb torrent_download | cut -f1)
-          TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
-          echo "Total downloaded size: ${TOTAL_SIZE_MB} MB"
-
-          # Warn if too large for GitHub
-          if [ "$TOTAL_SIZE" -gt 500000000 ]; then  # 500MB warning
-            echo "⚠️  WARNING: Downloaded content is ${TOTAL_SIZE_MB} MB, which exceeds GitHub's recommended limits."
-            echo "This may cause push failures or repository suspension."
-            echo "Consider using this action only for files under 500MB total."
-          fi
-
-          # Function to get unique folder name
-          get_unique_folder() {
-            local BASE_PATH="$1"
-            local NAME="$2"
-            local ORIG_NAME="$NAME"
-            local COUNTER=1
-            while [ -d "$BASE_PATH/$NAME" ]; do
-              NAME="${ORIG_NAME}_${COUNTER}"
-              COUNTER=$((COUNTER + 1))
-            done
-            echo "$NAME"
-          }
-
-          # Process each downloaded file/directory
-          for ITEM in torrent_download/*; do
-            if [ ! -e "$ITEM" ]; then
-              continue
-            fi
             
-            ITEM_NAME=$(basename "$ITEM")
-            FOLDER_NAME=$(get_unique_folder "splitted_downloads" "${ITEM_NAME%.*}")
-            mkdir -p "splitted_downloads/$FOLDER_NAME"
+            echo "Error report created at $ERROR_FOLDER/README.md"
+          else
+            echo "Successfully downloaded $DOWNLOADED_FILES files"
+            echo "Files in torrent_download:"
+            ls -la torrent_download/
             
-            if [ -d "$ITEM" ]; then
-              # Directory - zip the whole folder
-              echo "Zipping directory: $ITEM_NAME"
-              if [ -n "$ZIP_PASSWORD" ]; then
-                zip -r -s "$SPLIT_SIZE" -P "$ZIP_PASSWORD" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM"
-              else
-                zip -r -s "$SPLIT_SIZE" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM"
+            # Calculate total size
+            TOTAL_SIZE=$(du -sb torrent_download | cut -f1)
+            TOTAL_SIZE_MB=$((TOTAL_SIZE / 1024 / 1024))
+            echo "Total downloaded size: ${TOTAL_SIZE_MB} MB"
+            
+            # Process downloaded files
+            for ITEM in torrent_download/*; do
+              if [ ! -e "$ITEM" ]; then
+                continue
               fi
-            else
-              # Single file - check size and split if needed
-              FILE_SIZE=$(stat -c%s "$ITEM")
-              FILE_SIZE_MB=$((FILE_SIZE / 1024 / 1024))
               
-              if [ "$FILE_SIZE" -gt 94371840 ]; then  # 90MB in bytes
-                echo "File $ITEM_NAME is ${FILE_SIZE_MB}MB - splitting into 90MB parts"
-                if [ -n "$ZIP_PASSWORD" ]; then
-                  zip -j -s "$SPLIT_SIZE" -P "$ZIP_PASSWORD" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM"
-                else
-                  zip -j -s "$SPLIT_SIZE" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM"
-                fi
-                
-                # Count parts
-                PARTS_COUNT=$(ls splitted_downloads/$FOLDER_NAME/*.z* 2>/dev/null | wc -l)
-                PARTS_COUNT=$((PARTS_COUNT + 1))
-              else
-                echo "File $ITEM_NAME is ${FILE_SIZE_MB}MB - creating single zip"
-                if [ -n "$ZIP_PASSWORD" ]; then
-                  zip -j -P "$ZIP_PASSWORD" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM"
-                else
-                  zip -j "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM"
-                fi
-                PARTS_COUNT=1
+              ITEM_NAME=$(basename "$ITEM")
+              # Skip .torrent metadata files
+              if [[ "$ITEM_NAME" == *.torrent ]]; then
+                continue
               fi
-            fi
-            
-            # Generate README for this download
-            FOLDER_ENCODED=$(echo "$FOLDER_NAME" | sed 's/ /%20/g')
-            {
-              echo "# $ITEM_NAME - Torrent Download"
-              echo ""
-              echo "---"
-              echo ""
-              echo "## Torrent Information"
-              echo ""
-              echo "| Property | Value |"
-              echo "|----------|-------|"
-              echo "| **Original Name** | \`$ITEM_NAME\` |"
-              echo "| **Torrent Hash** | \`$TORRENT_HASH\` |"
-              echo "| **Size** | ${FILE_SIZE_MB} MB |"
-              echo "| **Parts** | ${PARTS_COUNT} |"
-              echo "| **Split Size** | 90MB per part |"
-              if [ -n "$ZIP_PASSWORD" ]; then
-                echo "| **Password Protected** | **YES** |"
-              else
-                echo "| **Password Protected** | **NO** |"
-              fi
-              echo "| **Download Date** | $(date '+%Y-%m-%d %H:%M:%S UTC') |"
-              echo ""
-              echo "---"
-              echo ""
-              echo "## Download Links"
-              echo ""
-              echo "| Part | Link |"
-              echo "|------|------|"
               
-              # Add links for all parts
-              for part in splitted_downloads/$FOLDER_NAME/*.zip splitted_downloads/$FOLDER_NAME/*.z*; do
-                if [ -f "$part" ]; then
-                  PART_NAME=$(basename "$part")
-                  PART_ENCODED=$(echo "$PART_NAME" | sed 's/ /%20/g')
-                  RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/splitted_downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
-                  echo "| \`$PART_NAME\` | [Download]($RAW_LINK) |"
-                fi
+              # Create unique folder name
+              BASENAME_NO_EXT="${ITEM_NAME%.*}"
+              FOLDER_NAME="$BASENAME_NO_EXT"
+              COUNTER=1
+              while [ -d "splitted_downloads/$FOLDER_NAME" ]; do
+                FOLDER_NAME="${BASENAME_NO_EXT}_${COUNTER}"
+                COUNTER=$((COUNTER + 1))
               done
               
-              echo ""
-              echo "---"
-              echo ""
-              echo "## How to Reassemble"
-              echo ""
-              echo "### If downloaded as .z01, .z02, etc. files:"
-              echo "\`\`\`bash"
-              echo "# Combine parts"
-              echo "cat ${ITEM_NAME}.z* > combined.zip"
-              echo "unzip combined.zip"
-              echo "\`\`\`"
-              echo ""
-              echo "### If single zip file:"
-              echo "\`\`\`bash"
-              echo "unzip ${ITEM_NAME}.zip"
-              echo "\`\`\`"
-              echo ""
-              if [ -n "$ZIP_PASSWORD" ]; then
-                echo "**Password required for extraction**"
-                echo ""
+              mkdir -p "splitted_downloads/$FOLDER_NAME"
+              
+              if [ -d "$ITEM" ]; then
+                # Directory - zip the whole folder
+                echo "Zipping directory: $ITEM_NAME"
+                if [ -n "$ZIP_PASSWORD" ]; then
+                  zip -r -s "$SPLIT_SIZE" -P "$ZIP_PASSWORD" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM" > /dev/null 2>&1
+                else
+                  zip -r -s "$SPLIT_SIZE" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM" > /dev/null 2>&1
+                fi
+              else
+                # Single file
+                FILE_SIZE=$(stat -c%s "$ITEM")
+                FILE_SIZE_MB=$((FILE_SIZE / 1024 / 1024))
+                
+                echo "Processing $ITEM_NAME (${FILE_SIZE_MB} MB)"
+                
+                if [ "$FILE_SIZE" -gt 94371840 ]; then  # 90MB in bytes
+                  echo "File exceeds 90MB - splitting into parts"
+                  if [ -n "$ZIP_PASSWORD" ]; then
+                    zip -j -s "$SPLIT_SIZE" -P "$ZIP_PASSWORD" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM" > /dev/null 2>&1
+                  else
+                    zip -j -s "$SPLIT_SIZE" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM" > /dev/null 2>&1
+                  fi
+                else
+                  echo "File under 90MB - creating single zip"
+                  if [ -n "$ZIP_PASSWORD" ]; then
+                    zip -j -P "$ZIP_PASSWORD" "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM" > /dev/null 2>&1
+                  else
+                    zip -j "splitted_downloads/$FOLDER_NAME/${ITEM_NAME}.zip" "$ITEM" > /dev/null 2>&1
+                  fi
+                fi
               fi
-              echo "---"
-              echo ""
-              echo "*This tool created by [avasam.ir](https://avasam.ir)*"
-              echo "*Note: GitHub has a 100MB file limit. Files are split into 90MB parts.*"
-            } > "splitted_downloads/$FOLDER_NAME/README.md"
-          done
+              
+              # Count parts
+              PART_COUNT=$(ls splitted_downloads/$FOLDER_NAME/*.zip splitted_downloads/$FOLDER_NAME/*.z* 2>/dev/null | wc -l)
+              
+              # Generate README for this download
+              cat > "splitted_downloads/$FOLDER_NAME/README.md" << EOF
+# $ITEM_NAME - Torrent Download
 
-      - name: Create master README with download links
+---
+
+## Torrent Information
+
+| Property | Value |
+|----------|-------|
+| **Original Name** | \`$ITEM_NAME\` |
+| **Torrent Hash** | \`$TORRENT_HASH\` |
+| **Parts** | ${PART_COUNT} |
+| **Split Size** | 90MB per part |
+| **Download Date** | $(date '+%Y-%m-%d %H:%M:%S UTC') |
+| **Password Protected** | $([ -n "$ZIP_PASSWORD" ] && echo "YES" || echo "NO") |
+
+---
+
+## Download Links
+
+$(for part in splitted_downloads/$FOLDER_NAME/*.{zip,z[0-9][0-9]} 2>/dev/null; do
+  if [ -f "$part" ]; then
+    PART_NAME=$(basename "$part")
+    echo "| \`$PART_NAME\` | [Download]($(echo "https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/splitted_downloads/${FOLDER_NAME}/${PART_NAME}" | sed 's/ /%20/g')) |"
+  fi
+done)
+
+---
+
+## How to Reassemble
+
+\`\`\`bash
+# Download all parts to the same directory, then run:
+cat ${ITEM_NAME}.z* > combined.zip 2>/dev/null || cp ${ITEM_NAME}.zip combined.zip
+unzip combined.zip
+\`\`\`
+
+$([ -n "$ZIP_PASSWORD" ] && echo "**Password required for extraction**" || echo "")
+
+---
+
+*This tool created by [avasam.ir](https://avasam.ir)*
+EOF
+            done
+          fi
+
+      - name: Create master README
         run: |
           REPO_URL="${{ github.server_url }}/${{ github.repository }}/tree/${{ github.ref_name }}/splitted_downloads"
           
-          # List all downloaded torrent folders
-          FOLDERS=$(find splitted_downloads -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
-          
-          if [ -z "$FOLDERS" ]; then
-            echo "No folders found in splitted_downloads"
-            exit 0
+          # List all folders
+          if [ -d "splitted_downloads" ]; then
+            FOLDERS=$(find splitted_downloads -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort)
+          else
+            FOLDERS=""
           fi
           
           # Create README in splitted_downloads folder
-          {
-            echo "# 📦 Torrent Downloads"
-            echo ""
-            echo "This folder contains files downloaded from torrent magnet links."
-            echo ""
-            echo "**⚠️ Important:** GitHub limits files to 100MB. Large files are split into 90MB zip parts."
-            echo ""
-            echo "---"
-            echo ""
-            echo "## Available Downloads"
-            echo ""
-            echo "| Download | Size | Parts |"
-            echo "|----------|------|-------|"
+          mkdir -p splitted_downloads
+          
+          cat > "splitted_downloads/README.md" << 'EOF'
+# 📦 Torrent Downloads
+
+This folder contains files downloaded from torrent magnet links.
+
+**⚠️ Important:** GitHub limits files to 100MB. Large files are split into 90MB zip parts.
+
+---
+
+## Available Downloads
+
+EOF
+          
+          if [ -n "$FOLDERS" ]; then
+            echo "| Download | Parts |" >> splitted_downloads/README.md
+            echo "|----------|-------|" >> splitted_downloads/README.md
             
             for FOLDER in $FOLDERS; do
-              if [ -f "splitted_downloads/$FOLDER/README.md" ]; then
-                # Extract info from README
-                SIZE=$(grep -E "\*\*Size\*\*" "splitted_downloads/$FOLDER/README.md" | grep -oP '\d+' | head -1)
-                PARTS=$(grep -E "\*\*Parts\*\*" "splitted_downloads/$FOLDER/README.md" | grep -oP '\d+')
-                FOLDER_ENCODED=$(echo "$FOLDER" | sed 's/ /%20/g')
-                echo "| [$FOLDER]($REPO_URL/$FOLDER_ENCODED) | ${SIZE:-?} MB | ${PARTS:-1} |"
-              else
-                FOLDER_ENCODED=$(echo "$FOLDER" | sed 's/ /%20/g')
-                echo "| [$FOLDER]($REPO_URL/$FOLDER_ENCODED) | ? | ? |"
+              if [[ "$FOLDER" == torrent_failed_* ]]; then
+                continue
               fi
-            done
-            
-            echo ""
-            echo "---"
-            echo ""
-            echo "## How to Download Individual Parts"
-            echo ""
-            echo "1. Navigate to the folder above"
-            echo "2. Click on any part to download it"
-            echo "3. Download all parts to the same directory"
-            echo "4. Use the reassembly commands from the folder's README"
-            echo ""
-            echo "---"
-            echo ""
-            echo "*This tool created by [avasam.ir](https://avasam.ir)*"
-          } > "splitted_downloads/README.md"
-          
-          # Update root README
-          if [ ! -f "README.md" ]; then
-            echo "# AVASAM Torrent Downloader" > README.md
-            echo "" >> README.md
-            echo "https://avasam.ir" >> README.md
-            echo "" >> README.md
-          fi
-          
-          SECTION_TITLE="📥 Torrent Downloads"
-          
-          # Remove old section if exists
-          if grep -q "$SECTION_TITLE" README.md; then
-            sed -i "/$SECTION_TITLE/,/^---$/d" README.md
-          fi
-          
-          {
-            echo ""
-            echo "---"
-            echo ""
-            echo "## $SECTION_TITLE"
-            echo ""
-            COUNTER=1
-            for FOLDER in $FOLDERS; do
               FOLDER_ENCODED=$(echo "$FOLDER" | sed 's/ /%20/g')
-              echo "${COUNTER}. [${FOLDER}](./splitted_downloads/${FOLDER_ENCODED})"
-              COUNTER=$((COUNTER + 1))
+              PART_COUNT=$(find splitted_downloads/$FOLDER -name "*.zip" -o -name "*.z*" 2>/dev/null | wc -l)
+              echo "| [$FOLDER]($REPO_URL/$FOLDER_ENCODED) | $PART_COUNT |" >> splitted_downloads/README.md
             done
-            echo ""
-            echo "---"
-            echo ""
-            echo "⚠️ **Torrent Disclaimer:**"
-            echo "- GitHub has a 100MB file limit (we split into 90MB parts)"
-            echo "- Large torrents may cause push failures"
-            echo "- Do not download copyrighted material without permission"
-            echo "- This tool is for educational purposes only"
-          } >> README.md
+          else
+            echo "No downloads yet. Run the workflow with a magnet link to download content." >> splitted_downloads/README.md
+          fi
+          
+          cat >> "splitted_downloads/README.md" << 'EOF'
+
+---
+
+## How to Download
+
+1. Navigate to the folder above
+2. Download all parts to the same directory
+3. Use the reassembly commands from the folder's README
+
+---
+
+*This tool created by [avasam.ir](https://avasam.ir)*
+EOF
+          
+          # Update root README if downloads exist
+          if [ -n "$FOLDERS" ] && [ ! "$FOLDERS" = "torrent_failed_*" ]; then
+            if [ ! -f "README.md" ]; then
+              echo "# AVASAM Torrent Downloader" > README.md
+              echo "" >> README.md
+              echo "https://avasam.ir" >> README.md
+            fi
+            
+            cat >> README.md << EOF
+
+---
+
+## 📥 Recent Torrent Downloads
+
+$(for FOLDER in $FOLDERS; do
+  if [[ "$FOLDER" != torrent_failed_* ]]; then
+    echo "- [${FOLDER}](./splitted_downloads/$(echo "$FOLDER" | sed 's/ /%20/g'))"
+  fi
+done)
+
+---
+EOF
+          fi
 
       - name: Commit & Push
         run: |
@@ -426,30 +220,24 @@ EOF
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           
-          echo "AVASAM (https://avasam.ir) - Committing torrent downloads"
+          echo "Committing files to repository..."
           
-          git add README.md splitted_downloads/README.md
+          # Add all files
+          git add README.md 2>/dev/null || true
+          git add splitted_downloads/ 2>/dev/null || true
           
-          # Count files to push
-          TOTAL_FILES=$(find splitted_downloads -type f \( -name "*.zip" -o -name "*.z*" -o -name "README.md" \) | wc -l)
-          echo "Total files to push: $TOTAL_FILES"
-          
-          if [ "$TOTAL_FILES" -eq 0 ]; then
-            echo "No files to commit"
-            exit 0
+          # Check if there are changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            MAGNET_SHORT="${{ github.event.inputs.magnet_link }}"
+            MAGNET_SHORT="${MAGNET_SHORT:0:60}"
+            
+            git commit -m "[AVASAM] Download torrent: ${MAGNET_SHORT} [skip ci]"
+            
+            # Pull and push
+            git pull --rebase origin "$BRANCH" || true
+            git push origin HEAD:"$BRANCH"
+            
+            echo "✅ Successfully pushed to GitHub"
           fi
-          
-          # Add all files and commit
-          git add splitted_downloads/
-          
-          # Create commit message with torrent info
-          MAGNET_SHORT="${{ github.event.inputs.magnet_link }}"
-          MAGNET_SHORT="${MAGNET_SHORT:0:80}..."
-          
-          git commit -m "[AVASAM] Download torrent: ${MAGNET_SHORT}" || echo "No changes to commit"
-          
-          # Push to GitHub
-          git pull --rebase origin "$BRANCH" || true
-          git push origin HEAD:"$BRANCH"
-          
-          echo "✅ All files pushed successfully - AVASAM (https://avasam.ir)"
