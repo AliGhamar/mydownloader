@@ -183,89 +183,90 @@ jobs:
           }
 
           split_file_into_parts() {
-            local INPUT_FILE="$1"
-            local OUTPUT_DIR="$2"
-            local BASENAME="$3"
-            local PASSWORD="$4"
-            local PART_SIZE_MB="$5"
-            
-            local FILE_SIZE=$(stat -c%s "$INPUT_FILE")
-            local FILE_SIZE_MB=$(( FILE_SIZE / 1024 / 1024 ))
-            
-            echo "Processing: $BASENAME (${FILE_SIZE_MB} MB)"
-            
-            if [ "$FILE_SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
-              echo "File exceeds ${PART_SIZE_MB}MB - splitting into parts"
-              
-              # Create a temporary directory for split files
-              local TEMP_DIR="${OUTPUT_DIR}/temp_split"
-              mkdir -p "$TEMP_DIR"
-              
-              # First, create a zip (with or without password)
-              local TEMP_ZIP="${TEMP_DIR}/${BASENAME}.zip"
-              if [ -n "$PASSWORD" ]; then
-                zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE"
-              else
-                zip -j "$TEMP_ZIP" "$INPUT_FILE"
-              fi
-              
-              # Split the zip file using split command (creates files: xaa, xab, xac...)
-              cd "$TEMP_DIR"
-              split -b "${PART_SIZE_MB}M" "${BASENAME}.zip" "${BASENAME}.zip.part."
-              
-              # Rename parts to have proper extensions
-              local PART_NUM=1
-              for part in ${BASENAME}.zip.part.*; do
-                if [ -f "$part" ]; then
-                  # Format part number with 3 digits (001, 002, etc)
-                  printf -v PART_NUM_PADDED "%03d" $PART_NUM
-                  mv "$part" "${OUTPUT_DIR}/${BASENAME}.zip.${PART_NUM_PADDED}"
-                  PART_NUM=$((PART_NUM + 1))
-                fi
-              done
-              
-              cd - > /dev/null
-              
-              # Clean up temp directory
-              rm -rf "$TEMP_DIR"
-              
-              # Create a checksum file for verification
-              {
-                echo "# Checksums for ${BASENAME}"
-                echo ""
-                echo "## SHA256"
-                echo ""
-                for part_file in ${OUTPUT_DIR}/${BASENAME}.zip.*; do
-                  if [ -f "$part_file" ]; then
-                    PART_BASENAME=$(basename "$part_file")
-                    sha256sum "$part_file" | awk '{print $1}' | sed "s|^|${PART_BASENAME}: |"
+                local INPUT_FILE="$1"
+                local OUTPUT_DIR="$2"
+                local BASENAME="$3"
+                local PASSWORD="$4"
+                local PART_SIZE_MB="$5"
+                
+                local FILE_SIZE=$(stat -c%s "$INPUT_FILE")
+                local FILE_SIZE_MB=$(( FILE_SIZE / 1024 / 1024 ))
+                
+                echo "Processing: $BASENAME (${FILE_SIZE_MB} MB)"
+                
+                if [ "$FILE_SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
+                  echo "File exceeds ${PART_SIZE_MB}MB - splitting into parts"
+                  
+                  # Create a temporary directory for split files
+                  local TEMP_DIR="${OUTPUT_DIR}/temp_split"
+                  mkdir -p "$TEMP_DIR"
+                  
+                  # First, create a zip (with or without password)
+                  local TEMP_ZIP="${TEMP_DIR}/${BASENAME}.zip"
+                  if [ -n "$PASSWORD" ]; then
+                    zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE"
+                  else
+                    zip -j "$TEMP_ZIP" "$INPUT_FILE"
                   fi
-                done
-                echo ""
-                echo "## Reassembly Instructions"
-                echo ""
-                echo "To reassemble the original zip file:"
-                echo "\`\`\`bash"
-                echo "cat ${BASENAME}.zip.* > ${BASENAME}.zip"
-                echo "unzip ${BASENAME}.zip"
-                echo "\`\`\`"
-                echo ""
-                if [ -n "$PASSWORD" ]; then
-                  echo "**Note:** The zip file is password protected. Use the password provided in the README."
+                  
+                  # Split the zip file using split command (creates files: xaa, xab, xac...)
+                  cd "$TEMP_DIR"
+                  split -b "${PART_SIZE_MB}M" "${BASENAME}.zip" "${BASENAME}.zip.part."
+                  
+                  # Rename parts and move them to OUTPUT_DIR
+                  local PART_NUM=1
+                  for part in ${BASENAME}.zip.part.*; do
+                    if [ -f "$part" ]; then
+                      # Format part number with 3 digits (001, 002, etc)
+                      printf -v PART_NUM_PADDED "%03d" $PART_NUM
+                      # Move the file to OUTPUT_DIR with new name
+                      mv "$part" "${OUTPUT_DIR}/${BASENAME}.zip.${PART_NUM_PADDED}"
+                      PART_NUM=$((PART_NUM + 1))
+                    fi
+                  done
+                  
+                  cd - > /dev/null
+                  
+                  # Clean up temp directory
+                  rm -rf "$TEMP_DIR"
+                  
+                  # Create a checksum file for verification
+                  {
+                    echo "# Checksums for ${BASENAME}"
+                    echo ""
+                    echo "## SHA256"
+                    echo ""
+                    for part_file in ${OUTPUT_DIR}/${BASENAME}.zip.*; do
+                      if [ -f "$part_file" ]; then
+                        PART_BASENAME=$(basename "$part_file")
+                        sha256sum "$part_file" | awk '{print $1}' | sed "s|^|${PART_BASENAME}: |"
+                      fi
+                    done
+                    echo ""
+                    echo "## Reassembly Instructions"
+                    echo ""
+                    echo "To reassemble the original zip file:"
+                    echo "\`\`\`bash"
+                    echo "cat ${BASENAME}.zip.* > ${BASENAME}.zip"
+                    echo "unzip ${BASENAME}.zip"
+                    echo "\`\`\`"
+                    echo ""
+                    if [ -n "$PASSWORD" ]; then
+                      echo "**Note:** The zip file is password protected. Use the password provided in the README."
+                    fi
+                  } > "${OUTPUT_DIR}/${BASENAME}_checksums.txt"
+                  
+                  echo "Created $(ls ${OUTPUT_DIR}/${BASENAME}.zip.* 2>/dev/null | wc -l) parts"
+                else
+                  # Small file - just zip it
+                  echo "File under ${PART_SIZE_MB}MB - creating single zip"
+                  if [ -n "$PASSWORD" ]; then
+                    zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+                  else
+                    zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+                  fi
                 fi
-              } > "${OUTPUT_DIR}/${BASENAME}_checksums.txt"
-              
-              echo "Created $(ls ${OUTPUT_DIR}/${BASENAME}.zip.* | wc -l) parts"
-            else
-              # Small file - just zip it
-              echo "File under ${PART_SIZE_MB}MB - creating single zip"
-              if [ -n "$PASSWORD" ]; then
-                zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
-              else
-                zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
-              fi
-            fi
-          }
+              }
 
           # Download torrent
           echo "Downloading torrent from: $MAGNET"
