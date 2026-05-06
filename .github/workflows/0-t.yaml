@@ -35,7 +35,7 @@ jobs:
       - name: Install aria2, zip, and torrent tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y aria2 zip curl unzip p7zip-full pv bc
+          sudo apt-get install -y aria2 zip curl unzip p7zip-full
           # Install peerflix for torrent streaming (lightweight)
           curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo apt-get install -y nodejs
@@ -59,31 +59,15 @@ jobs:
           REPO_NAME="${{ github.event.repository.name }}"
           BRANCH="${GITHUB_REF_NAME}"
 
-          echo "════════════════════════════════════════════════════════════════"
-          echo "🏷️  AVASAM - Torrent Downloader (https://avasam.ir)"
-          echo "════════════════════════════════════════════════════════════════"
-          echo "⚙️  Mode: $MODE"
-          echo "📦 Split threshold: $SPLIT_THRESHOLD_MB MB"
-          echo "🔐 Password protection: $([ -n "$ZIP_PASSWORD" ] && echo 'ENABLED' || echo 'DISABLED')"
-          echo "════════════════════════════════════════════════════════════════"
-          echo ""
+          echo "AVASAM (https://avasam.ir) - Downloading torrent with mode: $MODE"
+          echo "Split threshold: $SPLIT_THRESHOLD_MB MB (automatic)"
+          if [ -n "$ZIP_PASSWORD" ]; then
+            echo "Password protection: ENABLED"
+          else
+            echo "Password protection: DISABLED"
+          fi
 
           mkdir -p downloads tmp_downloads torrent_cache
-
-          # Function to show progress bar
-          show_progress() {
-            local current=$1
-            local total=$2
-            local width=50
-            local percent=$((current * 100 / total))
-            local filled=$((percent * width / 100))
-            local empty=$((width - filled))
-            
-            printf "\r📥 Progress: ["
-            printf "%${filled}s" | tr ' ' '█'
-            printf "%${empty}s" | tr ' ' '░'
-            printf "] %3d%% (%s/%s)" "$percent" "$(numfmt --to=iec $current)" "$(numfmt --to=iec $total)"
-          }
 
           RANDOM_WORDS=("alpha" "beta" "gamma" "delta" "epsilon" "zeta" "theta" "kappa" "lambda" "sigma" "omega" "nova" "star" "moon" "sun" "sky" "cloud" "river" "ocean" "mountain")
 
@@ -111,7 +95,7 @@ jobs:
             local MAGNET="$3"
             mkdir -p "downloads/$FOLDER_NAME"
             {
-              echo "# ❌ Torrent Download - Failed"
+              echo "# Torrent Download - Failed"
               echo ""
               echo "---"
               echo ""
@@ -133,79 +117,19 @@ jobs:
               echo ""
               echo "---"
               echo ""
+              echo "## Possible Solutions"
+              echo ""
+              echo "- Check if the magnet link is valid"
+              echo "- The torrent may have no seeders"
+              echo "- Try a different torrent client or source"
+              echo "- Some torrents may be blocked"
+              echo "- Increase timeout or retry later"
+              echo ""
+              echo "---"
+              echo ""
               echo "*This tool created by [avasam.ir](https://avasam.ir)*"
             } > "downloads/$FOLDER_NAME/README.md"
-            echo "❌ Error file created: downloads/$FOLDER_NAME/README.md"
-          }
-
-          download_with_aria2_progress() {
-            local MAGNET="$1"
-            
-            echo "🔗 Starting aria2c with real-time progress..."
-            echo ""
-            
-            # Run aria2c with progress output
-            aria2c \
-              --seed-time=0 \
-              --max-connection-per-server=16 \
-              --split=16 \
-              --min-split-size=1M \
-              --max-overall-upload-limit=1K \
-              --bt-max-peers=50 \
-              --bt-request-peer-speed-limit=10M \
-              --follow-torrent=true \
-              --console-log-level=notice \
-              --summary-interval=1 \
-              --human-readable=true \
-              --dir="tmp_downloads" \
-              "$MAGNET" 2>&1 | while IFS= read -r line; do
-                # Extract download progress from aria2 output
-                if echo "$line" | grep -q "DOWNLOADED"; then
-                  echo "  $line" | sed 's/^/  /'
-                elif echo "$line" | grep -q "\[#\|\]"; then
-                  # Colorize progress output
-                  echo -e "\033[36m$line\033[0m"
-                elif echo "$line" | grep -q "COMPLETE\|ERROR"; then
-                  echo "$line"
-                else
-                  # Dim non-critical messages
-                  echo -e "\033[90m$line\033[0m" | head -c 120
-                  printf "\r"
-                fi
-              done
-            
-            return ${PIPESTATUS[0]}
-          }
-
-          download_with_peerflix_progress() {
-            local MAGNET="$1"
-            
-            echo "🎬 Trying peerflix with progress display..."
-            
-            # Run peerflix and monitor download folder
-            peerflix "$MAGNET" --download --path "tmp_downloads" &
-            PEERFLIX_PID=$!
-            
-            # Monitor progress
-            while kill -0 $PEERFLIX_PID 2>/dev/null; do
-              if [ -d "tmp_downloads" ]; then
-                TOTAL_SIZE=$(find tmp_downloads -type f ! -name "*.tmp" -exec stat -c%s {} \; 2>/dev/null | awk '{sum+=$1} END {print sum}')
-                if [ -n "$TOTAL_SIZE" ] && [ "$TOTAL_SIZE" -gt 0 ]; then
-                  # Try to get total torrent size from info
-                  BT_SIZE=$(aria2c --show-files=true "$MAGNET" 2>/dev/null | grep -oP 'Total length: \K[0-9]+' | head -1)
-                  if [ -n "$BT_SIZE" ] && [ "$BT_SIZE" -gt 0 ]; then
-                    PERCENT=$((TOTAL_SIZE * 100 / BT_SIZE))
-                    echo -ne "\r📥 Peerflix: Downloaded $(numfmt --to=iec $TOTAL_SIZE) - ${PERCENT}% complete...     "
-                  else
-                    echo -ne "\r📥 Peerflix: Downloaded $(numfmt --to=iec $TOTAL_SIZE)...     "
-                  fi
-                fi
-              fi
-              sleep 2
-            done
-            echo ""
-            wait $PEERFLIX_PID
-            return $?
+            echo "Error file created: downloads/$FOLDER_NAME/README.md"
           }
 
           download_torrent() {
@@ -215,57 +139,37 @@ jobs:
             local SUCCESS=false
             local ERROR_LOG=""
 
-            echo ""
-            echo "════════════════════════════════════════════════════════════════"
-            echo "📥 STARTING TORRENT DOWNLOAD"
-            echo "════════════════════════════════════════════════════════════════"
-            echo ""
-            
             for ((attempt=1; attempt<=MAX_RETRIES; attempt++)); do
-              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              echo "🔄 Attempt $attempt of $MAX_RETRIES"
-              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              echo ""
+              echo "Attempt $attempt of $MAX_RETRIES for torrent"
               
               # Try using aria2c for torrent download
-              if download_with_aria2_progress "$MAGNET"; then
-                SUCCESS=true
-                break
-              fi
+              echo "Using aria2c for torrent download..."
+              ERROR_LOG=$(timeout 7200 aria2c \
+                --seed-time=0 \
+                --max-connection-per-server=16 \
+                --split=16 \
+                --min-split-size=1M \
+                --max-overall-upload-limit=1K \
+                --bt-max-peers=50 \
+                --bt-request-peer-speed-limit=10M \
+                --follow-torrent=true \
+                --dir="tmp_downloads" \
+                "$MAGNET" 2>&1) && SUCCESS=true && break
               
-              echo ""
-              echo "⚠️  aria2c failed, trying peerflix fallback..."
-              echo ""
+              echo "aria2c failed, trying peerflix fallback..."
               
-              if download_with_peerflix_progress "$MAGNET"; then
-                SUCCESS=true
-                break
-              fi
+              # Fallback to peerflix for streaming download
+              ERROR_LOG=$(timeout 7200 peerflix "$MAGNET" --download --path "tmp_downloads" 2>&1) && SUCCESS=true && break
               
-              if [ $attempt -lt $MAX_RETRIES ]; then
-                echo ""
-                echo "⏳ Waiting ${RETRY_DELAY}s before retry..."
-                sleep $RETRY_DELAY
-                RETRY_DELAY=$((RETRY_DELAY * 2))
-                echo ""
-              fi
+              echo "Waiting ${RETRY_DELAY}s before retry..."
+              sleep $RETRY_DELAY
             done
 
-            echo ""
             if [ "$SUCCESS" = true ]; then
               # Check if we have any downloaded files
-              FILE_COUNT=$(find tmp_downloads -type f ! -name "*.aria2" ! -name "*.torrent" ! -name "*.tmp" 2>/dev/null | wc -l)
-              TOTAL_SIZE=$(find tmp_downloads -type f ! -name "*.aria2" ! -name "*.torrent" ! -name "*.tmp" -exec stat -c%s {} \; 2>/dev/null | awk '{sum+=$1} END {print sum}')
-              
-              echo "════════════════════════════════════════════════════════════════"
-              echo "✅ DOWNLOAD COMPLETE!"
-              echo "════════════════════════════════════════════════════════════════"
-              echo "📁 Files downloaded: $FILE_COUNT"
-              echo "💾 Total size: $(numfmt --to=iec $TOTAL_SIZE 2>/dev/null || echo "$TOTAL_SIZE bytes")"
-              echo "════════════════════════════════════════════════════════════════"
-              echo ""
-              
+              FILE_COUNT=$(find tmp_downloads -type f ! -name "*.aria2" ! -name "*.torrent" 2>/dev/null | wc -l)
               if [ "$FILE_COUNT" -gt 0 ]; then
+                echo "Successfully downloaded torrent: $FILE_COUNT files"
                 return 0
               else
                 rm -rf tmp_downloads/*
@@ -273,21 +177,10 @@ jobs:
                 return 1
               fi
             else
-              echo "════════════════════════════════════════════════════════════════"
-              echo "❌ DOWNLOAD FAILED!"
-              echo "════════════════════════════════════════════════════════════════"
-              create_error_file "torrent_failed" "Download failed after $MAX_RETRIES attempts" "$MAGNET"
+              create_error_file "torrent_failed" "$ERROR_LOG" "$MAGNET"
               return 1
             fi
           }
-
-          # Start download
-          download_torrent "$MAGNET" || exit 1
-
-          # Remove temp files
-          echo "🧹 Cleaning up temporary files..."
-          find tmp_downloads -type f \( -name "*.aria2" -o -name "*.torrent" -o -name "*.tmp" \) -delete 2>/dev/null
-          echo ""
 
           split_and_compress() {
             local INPUT_FILE="$1"
@@ -295,84 +188,71 @@ jobs:
             local BASENAME="$3"
             local PASSWORD="$4"
             local THRESHOLD_MB="$5"
-            local THRESHOLD_BYTES=$((THRESHOLD_MB * 1024 * 1024))
             
-            local FILE_SIZE=$(stat -c%s "$INPUT_FILE" 2>/dev/null || echo 0)
+            local FILE_SIZE=$(stat -c%s "$INPUT_FILE")
             local FILE_SIZE_MB=$(( FILE_SIZE / 1024 / 1024 ))
             
-            echo "📦 Processing: $BASENAME (${FILE_SIZE_MB} MB)"
+            echo "Processing: $BASENAME (${FILE_SIZE_MB} MB)"
             
             if [ "$FILE_SIZE" -gt "$THRESHOLD_BYTES" ]; then
-              echo "   ⚠️  File exceeds ${THRESHOLD_MB}MB - splitting into parts"
-              echo "   🔄 Creating zip archive..."
+              echo "File exceeds ${THRESHOLD_MB}MB - splitting into parts"
               
               # Create a temporary zip first
               local TEMP_ZIP="${OUTPUT_DIR}/temp_${BASENAME}.zip"
               if [ -n "$PASSWORD" ]; then
-                zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE" 2>&1 | grep -v "adding:" | while read line; do
-                  echo "     $line"
-                done
+                zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE"
               else
-                zip -j "$TEMP_ZIP" "$INPUT_FILE" 2>&1 | grep -v "adding:" | while read line; do
-                  echo "     $line"
-                done
+                zip -j "$TEMP_ZIP" "$INPUT_FILE"
               fi
               
-              echo "   ✂️  Splitting into ${THRESHOLD_MB}MB chunks..."
               # Split the zip file
               if [ -n "$PASSWORD" ]; then
-                zip -s "${THRESHOLD_MB}m" -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$TEMP_ZIP" 2>&1 | grep -E "splitting|writing" || true
+                zip -s "${THRESHOLD_MB}m" -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$TEMP_ZIP"
               else
-                zip -s "${THRESHOLD_MB}m" "${OUTPUT_DIR}/${BASENAME}.zip" "$TEMP_ZIP" 2>&1 | grep -E "splitting|writing" || true
+                zip -s "${THRESHOLD_MB}m" "${OUTPUT_DIR}/${BASENAME}.zip" "$TEMP_ZIP"
               fi
               
               # Clean up
               rm -f "$TEMP_ZIP"
               
-              # Count parts
-              local PARTS_COUNT=$(ls ${OUTPUT_DIR}/${BASENAME}.z* ${OUTPUT_DIR}/${BASENAME}.zip 2>/dev/null | grep -v "temp_" | wc -l)
-              echo "   ✅ Created $PARTS_COUNT parts in ${OUTPUT_DIR}/"
-            else
-              echo "   ✅ File within limit - creating single zip"
-              if [ -n "$PASSWORD" ]; then
-                zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE" 2>&1 | grep -v "adding:" | while read line; do
-                  echo "     $line"
-                done
-              else
-                zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE" 2>&1 | grep -v "adding:" | while read line; do
-                  echo "     $line"
-                done
+              # Rename split files to have consistent naming
+              if [ -f "${OUTPUT_DIR}/${BASENAME}.z01" ]; then
+                mv "${OUTPUT_DIR}/${BASENAME}.z01" "${OUTPUT_DIR}/${BASENAME}.zip.001"
               fi
-              echo "   ✅ Created: ${BASENAME}.zip"
+              if [ -f "${OUTPUT_DIR}/${BASENAME}.z02" ]; then
+                mv "${OUTPUT_DIR}/${BASENAME}.z02" "${OUTPUT_DIR}/${BASENAME}.zip.002"
+              fi
+              
+              echo "Created split parts in ${OUTPUT_DIR}/"
+            else
+              # Small file - just zip it
+              if [ -n "$PASSWORD" ]; then
+                zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+              else
+                zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+              fi
             fi
-            echo ""
           }
 
-          echo "════════════════════════════════════════════════════════════════"
-          echo "📦 COMPRESSING AND SPLITTING FILES"
-          echo "════════════════════════════════════════════════════════════════"
-          echo ""
+          # Download torrent
+          echo "Downloading torrent from: $MAGNET"
+          download_torrent "$MAGNET" || echo "Failed to download torrent"
+
+          # Remove .aria2 temp files and .torrent files
+          find tmp_downloads -type f \( -name "*.aria2" -o -name "*.torrent" \) -delete
 
           if [ "$MODE" = "zip" ]; then
             if [ -n "$(ls -A tmp_downloads 2>/dev/null)" ]; then
               ARCHIVE_NAME="torrent_archive_$(date +%Y%m%d_%H%M%S)"
               FOLDER_NAME=$(get_unique_folder "downloads" "$ARCHIVE_NAME")
               mkdir -p "downloads/$FOLDER_NAME"
-              echo "📁 Creating archive in: downloads/$FOLDER_NAME"
-              echo ""
+              echo "Creating split archive in folder: downloads/$FOLDER_NAME"
               
-              echo "🗜️  Creating tar archive of all downloaded content..."
               # Create a single archive of all downloaded content
               TEMP_TAR="/tmp/${ARCHIVE_NAME}.tar"
               cd tmp_downloads
-              tar -cf "$TEMP_TAR" . 2>&1 | while read line; do
-                echo "  $line"
-              done
+              tar -cf "$TEMP_TAR" .
               cd ..
-              
-              TAR_SIZE=$(stat -c%s "$TEMP_TAR" 2>/dev/null || echo 0)
-              echo "📊 Tar archive size: $(numfmt --to=iec $TAR_SIZE 2>/dev/null || echo "$TAR_SIZE bytes")"
-              echo ""
               
               # Now split and compress the tar file
               split_and_compress "$TEMP_TAR" "downloads/$FOLDER_NAME" "$ARCHIVE_NAME" "$ZIP_PASSWORD" "$SPLIT_THRESHOLD_MB"
@@ -385,29 +265,27 @@ jobs:
               # Create README.md for zip mode
               FOLDER_ENCODED=$(echo "${FOLDER_NAME}" | sed 's/ /%20/g')
               
-              echo "📝 Creating README with download links..."
-              
               {
-                echo "# 📦 ${ARCHIVE_NAME} - Torrent Archive"
+                echo "# ${ARCHIVE_NAME} - Torrent Archive"
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 📊 Download Information"
+                echo "## Download Information"
                 echo ""
                 echo "| Property | Value |"
                 echo "|----------|-------|"
                 echo "| **Archive Name** | \`${ARCHIVE_NAME}.zip\` |"
                 echo "| **Parts** | ${PARTS_COUNT} |"
-                echo "| **Status** | ✅ **Complete (100%)** |"
+                echo "| **Status** | **Complete (100%)** |"
                 if [ -n "$ZIP_PASSWORD" ]; then
-                  echo "| **Password Protected** | 🔒 **YES** |"
+                  echo "| **Password Protected** | **YES** |"
                 else
-                  echo "| **Password Protected** | 🔓 **NO** |"
+                  echo "| **Password Protected** | **NO** |"
                 fi
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 🔗 Download Links"
+                echo "## Download Links"
                 echo ""
                 echo "| File | Link |"
                 echo "|------|------|"
@@ -418,9 +296,7 @@ jobs:
                   PART_BASENAME=$(basename "$part_file")
                   PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
                   RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
-                  PART_SIZE=$(stat -c%s "$part_file")
-                  PART_SIZE_MB=$((PART_SIZE / 1024 / 1024))
-                  echo "| \`${PART_BASENAME}\` (${PART_SIZE_MB} MB) | [Download](${RAW_LINK}) |" >> "downloads/$FOLDER_NAME/README.md"
+                  echo "| \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |" >> "downloads/$FOLDER_NAME/README.md"
                 fi
               done
               
@@ -428,9 +304,9 @@ jobs:
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 🔧 How to Reassemble"
+                echo "## How to Reassemble"
                 echo ""
-                echo "### Linux/Mac:"
+                echo "**Linux/Mac:**"
                 echo "\`\`\`bash"
                 echo "# Download all parts to the same directory"
                 echo "# Then run:"
@@ -438,14 +314,12 @@ jobs:
                 echo "unzip ${ARCHIVE_NAME}.zip"
                 echo "\`\`\`"
                 echo ""
-                echo "### Windows:"
-                echo "1. Download all parts (.zip, .z01, .z02, etc.)"
-                echo "2. Use 7-Zip to extract the first part (${ARCHIVE_NAME}.zip)"
-                echo "3. 7-Zip will automatically combine all parts"
+                echo "**Windows:**"
+                echo "Download all parts, then use 7-Zip to extract the first part (.zip.001)"
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 🔗 Original Magnet Link"
+                echo "## Original Magnet Link"
                 echo ""
                 echo "\`\`\`"
                 echo "$MAGNET"
@@ -453,23 +327,18 @@ jobs:
                 echo ""
                 echo "---"
                 echo ""
-                echo "*🛠️ Created by [avasam.ir](https://avasam.ir)*"
+                echo "*This tool created by [avasam.ir](https://avasam.ir)*"
               } >> "downloads/$FOLDER_NAME/README.md"
             fi
             rm -rf tmp_downloads
           else
             # Normal mode - process each file individually
-            echo "📁 Processing individual files..."
-            echo ""
-            
-            # Process files
-            find tmp_downloads -type f ! -name "*.aria2" ! -name "*.torrent" ! -name "*.tmp" | while read -r FILE; do
+            find tmp_downloads -type f ! -name "*.aria2" ! -name "*.torrent" | while read -r FILE; do
               BASENAME=$(basename "$FILE")
               BASENAME_NO_EXT="${BASENAME%.*}"
               FOLDER_NAME=$(get_unique_folder "downloads" "$BASENAME_NO_EXT")
               mkdir -p "downloads/$FOLDER_NAME"
               
-              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
               split_and_compress "$FILE" "downloads/$FOLDER_NAME" "$BASENAME_NO_EXT" "$ZIP_PASSWORD" "$SPLIT_THRESHOLD_MB"
               
               # Create README for this item
@@ -477,26 +346,26 @@ jobs:
               PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/${BASENAME_NO_EXT}.zip* 2>/dev/null | wc -l)
               
               {
-                echo "# 📄 ${BASENAME} - Torrent Download"
+                echo "# ${BASENAME} - Torrent Download"
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 📊 Download Information"
+                echo "## Download Information"
                 echo ""
                 echo "| Property | Value |"
                 echo "|----------|-------|"
                 echo "| **Original File** | \`${BASENAME}\` |"
                 echo "| **Parts** | ${PARTS_COUNT} |"
-                echo "| **Status** | ✅ **Complete (100%)** |"
+                echo "| **Status** | **Complete (100%)** |"
                 if [ -n "$ZIP_PASSWORD" ]; then
-                  echo "| **Password Protected** | 🔒 **YES** |"
+                  echo "| **Password Protected** | **YES** |"
                 else
-                  echo "| **Password Protected** | 🔓 **NO** |"
+                  echo "| **Password Protected** | **NO** |"
                 fi
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 🔗 Download Links"
+                echo "## Download Links"
                 echo ""
                 echo "| File | Link |"
                 echo "|------|------|"
@@ -507,9 +376,7 @@ jobs:
                   PART_BASENAME=$(basename "$part_file")
                   PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
                   RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
-                  PART_SIZE=$(stat -c%s "$part_file")
-                  PART_SIZE_MB=$((PART_SIZE / 1024 / 1024))
-                  echo "| \`${PART_BASENAME}\` (${PART_SIZE_MB} MB) | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
+                  echo "| \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
                 fi
               done
               
@@ -517,7 +384,7 @@ jobs:
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 🔗 Original Magnet Link"
+                echo "## Original Magnet Link"
                 echo ""
                 echo "\`\`\`"
                 echo "$MAGNET"
@@ -525,26 +392,20 @@ jobs:
                 echo ""
                 echo "---"
                 echo ""
-                echo "*🛠️ Created by [avasam.ir](https://avasam.ir)*"
+                echo "*This tool created by [avasam.ir](https://avasam.ir)*"
               } >> "downloads/${FOLDER_NAME}/README.md"
             done
             
-            # Process directories
+            # Handle directories in normal mode
             find tmp_downloads -mindepth 1 -maxdepth 1 -type d | while read -r DIR; do
               DIRNAME=$(basename "$DIR")
               FOLDER_NAME=$(get_unique_folder "downloads" "$DIRNAME")
               mkdir -p "downloads/$FOLDER_NAME"
               
-              echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-              echo "📁 Processing directory: $DIRNAME/"
-              echo ""
-              
               # Create tar of directory then split
               TEMP_TAR="/tmp/${DIRNAME}.tar"
               cd "$DIR"
-              tar -cf "$TEMP_TAR" . 2>&1 | while read line; do
-                echo "  $line"
-              done
+              tar -cf "$TEMP_TAR" .
               cd ../..
               
               split_and_compress "$TEMP_TAR" "downloads/$FOLDER_NAME" "$DIRNAME" "$ZIP_PASSWORD" "$SPLIT_THRESHOLD_MB"
@@ -555,26 +416,26 @@ jobs:
               PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/${DIRNAME}.zip* 2>/dev/null | wc -l)
               
               {
-                echo "# 📁 ${DIRNAME} - Torrent Download"
+                echo "# ${DIRNAME} - Torrent Download"
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 📊 Download Information"
+                echo "## Download Information"
                 echo ""
                 echo "| Property | Value |"
                 echo "|----------|-------|"
-                echo "| **Original Directory** | \`${DIRNAME}/\` |"
+                echo "| **Original Directory** | \`${DIRNAME}\` |"
                 echo "| **Parts** | ${PARTS_COUNT} |"
-                echo "| **Status** | ✅ **Complete (100%)** |"
+                echo "| **Status** | **Complete (100%)** |"
                 if [ -n "$ZIP_PASSWORD" ]; then
-                  echo "| **Password Protected** | 🔒 **YES** |"
+                  echo "| **Password Protected** | **YES** |"
                 else
-                  echo "| **Password Protected** | 🔓 **NO** |"
+                  echo "| **Password Protected** | **NO** |"
                 fi
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 🔗 Download Links"
+                echo "## Download Links"
                 echo ""
                 echo "| File | Link |"
                 echo "|------|------|"
@@ -585,9 +446,7 @@ jobs:
                   PART_BASENAME=$(basename "$part_file")
                   PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
                   RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
-                  PART_SIZE=$(stat -c%s "$part_file")
-                  PART_SIZE_MB=$((PART_SIZE / 1024 / 1024))
-                  echo "| \`${PART_BASENAME}\` (${PART_SIZE_MB} MB) | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
+                  echo "| \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
                 fi
               done
               
@@ -595,7 +454,7 @@ jobs:
                 echo ""
                 echo "---"
                 echo ""
-                echo "## 🔗 Original Magnet Link"
+                echo "## Original Magnet Link"
                 echo ""
                 echo "\`\`\`"
                 echo "$MAGNET"
@@ -603,17 +462,12 @@ jobs:
                 echo ""
                 echo "---"
                 echo ""
-                echo "*🛠️ Created by [avasam.ir](https://avasam.ir)*"
+                echo "*This tool created by [avasam.ir](https://avasam.ir)*"
               } >> "downloads/${FOLDER_NAME}/README.md"
             done
             
             rm -rf tmp_downloads
           fi
-
-          echo ""
-          echo "════════════════════════════════════════════════════════════════"
-          echo "✅ PROCESSING COMPLETE!"
-          echo "════════════════════════════════════════════════════════════════"
 
       - name: Update README.md with download links
         run: |
@@ -629,36 +483,36 @@ jobs:
 
           # Create README.md inside downloads folder
           {
-            echo "# 📥 Downloaded Torrent Files"
+            echo "# Downloaded Torrent Files"
             echo ""
-            echo "## 🔗 Original Magnet Link"
+            echo "## Original Magnet Link"
             echo "\`\`\`"
             echo "$MAGNET"
             echo "\`\`\`"
             echo ""
-            echo "## 📁 Downloaded Content"
+            echo "## Downloaded Content"
             echo ""
             echo "$FOLDERS" | while read -r FOLDER; do
               if [ -n "$FOLDER" ]; then
                 FOLDER_ENCODED=$(echo "${FOLDER}" | sed 's/ /%20/g')
-                echo "- 📦 [${FOLDER}](./${FOLDER_ENCODED})"
+                echo "- [${FOLDER}](./${FOLDER_ENCODED})"
               fi
             done
             echo ""
             echo "---"
             echo ""
-            echo "*🛠️ Created by [avasam.ir](https://avasam.ir)*"
+            echo "*This tool created by [avasam.ir](https://avasam.ir)*"
           } > "downloads/README.md"
 
-          echo "✅ downloads/README.md created"
+          echo "downloads/README.md created"
 
           # Update root README.md
           SECTION_TITLE="فایل های دانلود شده از تورنت در گیتهاب شما :"
 
           if [ ! -f "README.md" ]; then
-            echo "# 🏷️ AVASAM Torrent Downloader" > README.md
+            echo "# AVASAM Torrent Downloader" > README.md
             echo "" >> README.md
-            echo "🌐 https://avasam.ir" >> README.md
+            echo "https://avasam.ir" >> README.md
             echo "" >> README.md
           fi
 
@@ -676,7 +530,7 @@ jobs:
             COUNTER=1
             echo "$FOLDERS" | while read -r FOLDER; do
               if [ -n "$FOLDER" ]; then
-                echo "${COUNTER}. 📦 [$FOLDER]($REPO_URL/$FOLDER)"
+                echo "${COUNTER}. [$FOLDER]($REPO_URL/$FOLDER)"
                 echo ""
                 COUNTER=$((COUNTER + 1))
               fi
@@ -684,7 +538,7 @@ jobs:
             echo "---"
           } >> README.md
 
-          echo "✅ README.md updated"
+          echo "README.md updated"
 
       - name: Commit & Push in batches of 5 files
         run: |
@@ -692,27 +546,21 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-          echo "════════════════════════════════════════════════════════════════"
-          echo "📤 COMMITTING AND PUSHING TO GITHUB"
-          echo "════════════════════════════════════════════════════════════════"
-          echo ""
+          echo "AVASAM (https://avasam.ir) - Preparing to commit torrent files"
 
           git add README.md
           git add downloads/README.md
           mapfile -t ALL_FILES < <(git ls-files --others --modified --exclude-standard downloads/)
 
           TOTAL=${#ALL_FILES[@]}
-          echo "📁 Total files to push: $TOTAL"
-          echo ""
+          echo "Total files to push: $TOTAL"
 
           if [ "$TOTAL" -eq 0 ]; then
             if [ -n "$(git diff --cached --name-only)" ]; then
-              echo "📝 Committing README updates..."
               git commit -m "[AVASAM] Update README.md [skip ci]"
               git push origin HEAD:"$BRANCH"
-              echo "✅ README pushed"
             fi
-            echo "No new files to commit"
+            echo "Nothing else to commit"
             exit 0
           fi
 
@@ -723,9 +571,7 @@ jobs:
             BATCH_NUM=$(( BATCH_NUM + 1 ))
             BATCH=("${ALL_FILES[@]:i:BATCH_SIZE}")
 
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "📤 Pushing batch $BATCH_NUM: files $((i+1)) to $(( i + ${#BATCH[@]} )) of $TOTAL"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Pushing batch $BATCH_NUM: files $((i+1)) to $(( i + ${#BATCH[@]} )) of $TOTAL"
 
             git add "${BATCH[@]}"
             if [ "$BATCH_NUM" -eq 1 ]; then
@@ -737,14 +583,10 @@ jobs:
               git commit -m "[AVASAM] Add torrent downloaded files - batch $BATCH_NUM [skip ci]"
               git pull --rebase origin "$BRANCH"
               git push origin HEAD:"$BRANCH"
-              echo "✅ Batch $BATCH_NUM pushed"
+              echo "Batch $BATCH_NUM pushed"
             else
-              echo "⏭️  Batch $BATCH_NUM skipped - no new changes"
+              echo "Batch $BATCH_NUM skipped - no new changes"
             fi
-            echo ""
           done
 
-          echo "════════════════════════════════════════════════════════════════"
-          echo "✅ ALL DONE! $TOTAL files pushed in $BATCH_NUM batch(es)"
-          echo "🌐 https://avasam.ir"
-          echo "════════════════════════════════════════════════════════════════"
+          echo "All $TOTAL files pushed in $BATCH_NUM batch(es) - AVASAM (https://avasam.ir)"
