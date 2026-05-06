@@ -74,3 +74,11 @@ https://github.com/nikzad-avasam/youtube-dl
 1. [video_360p](https://github.com/AliFrzngn/mydownloader/tree/main/downloads/video_360p)
 
 ---
+
+---
+
+## فایل های دانلود شده از تورنت در گیتهاب شما :
+
+1. [torrent_archive_20260506_231232](https://github.com/AliGhamar/mydownloader/tree/main/downloads/torrent_archive_20260506_231232)
+
+---
