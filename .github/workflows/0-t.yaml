@@ -35,7 +35,7 @@ jobs:
       - name: Install aria2, zip, and torrent tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y aria2 zip curl unzip
+          sudo apt-get install -y aria2 zip curl unzip p7zip-full
           # Install peerflix for torrent streaming (lightweight)
           curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
           sudo apt-get install -y nodejs
@@ -87,45 +87,6 @@ jobs:
               RANDOM_SUFFIX=$(get_random_word)
             done
             echo "${NAME}_${RANDOM_SUFFIX}"
-          }
-
-          get_unique_name() {
-            local BASE_PATH="$1"
-            local NAME="$2"
-            local IS_DIR="$3"
-            if [ "$IS_DIR" = "true" ]; then
-              if [ ! -d "$BASE_PATH/$NAME" ]; then
-                echo "$NAME"
-                return
-              fi
-              local COUNTER=1
-              while [ -d "$BASE_PATH/${NAME}_${COUNTER}" ]; do
-                COUNTER=$((COUNTER + 1))
-              done
-              echo "${NAME}_${COUNTER}"
-            else
-              if [ ! -f "$BASE_PATH/$NAME" ]; then
-                echo "$NAME"
-                return
-              fi
-              local FILENAME="${NAME%.*}"
-              local EXT="${NAME##*.}"
-              if [ "$FILENAME" = "$NAME" ]; then
-                EXT=""
-              fi
-              local COUNTER=1
-              if [ -n "$EXT" ] && [ "$FILENAME" != "$EXT" ]; then
-                while [ -f "$BASE_PATH/${FILENAME}_${COUNTER}.${EXT}" ]; do
-                  COUNTER=$((COUNTER + 1))
-                done
-                echo "${FILENAME}_${COUNTER}.${EXT}"
-              else
-                while [ -f "$BASE_PATH/${NAME}_${COUNTER}" ]; do
-                  COUNTER=$((COUNTER + 1))
-                done
-                echo "${NAME}_${COUNTER}"
-              fi
-            fi
           }
 
           create_error_file() {
@@ -183,7 +144,7 @@ jobs:
               
               # Try using aria2c for torrent download
               echo "Using aria2c for torrent download..."
-              ERROR_LOG=$(timeout 3600 aria2c \
+              ERROR_LOG=$(timeout 7200 aria2c \
                 --seed-time=0 \
                 --max-connection-per-server=16 \
                 --split=16 \
@@ -198,8 +159,7 @@ jobs:
               echo "aria2c failed, trying peerflix fallback..."
               
               # Fallback to peerflix for streaming download
-              local TORRENT_NAME=$(echo "$MAGNET" | md5sum | cut -d' ' -f1)
-              ERROR_LOG=$(timeout 3600 peerflix "$MAGNET" --download --path "tmp_downloads" 2>&1) && SUCCESS=true && break
+              ERROR_LOG=$(timeout 7200 peerflix "$MAGNET" --download --path "tmp_downloads" 2>&1) && SUCCESS=true && break
               
               echo "Waiting ${RETRY_DELAY}s before retry..."
               sleep $RETRY_DELAY
@@ -222,6 +182,58 @@ jobs:
             fi
           }
 
+          split_and_compress() {
+            local INPUT_FILE="$1"
+            local OUTPUT_DIR="$2"
+            local BASENAME="$3"
+            local PASSWORD="$4"
+            local THRESHOLD_MB="$5"
+            
+            local FILE_SIZE=$(stat -c%s "$INPUT_FILE")
+            local FILE_SIZE_MB=$(( FILE_SIZE / 1024 / 1024 ))
+            
+            echo "Processing: $BASENAME (${FILE_SIZE_MB} MB)"
+            
+            if [ "$FILE_SIZE" -gt "$THRESHOLD_BYTES" ]; then
+              echo "File exceeds ${THRESHOLD_MB}MB - splitting into parts"
+              
+              # Create a temporary zip first
+              local TEMP_ZIP="${OUTPUT_DIR}/temp_${BASENAME}.zip"
+              if [ -n "$PASSWORD" ]; then
+                zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE"
+              else
+                zip -j "$TEMP_ZIP" "$INPUT_FILE"
+              fi
+              
+              # Split the zip file
+              if [ -n "$PASSWORD" ]; then
+                zip -s "${THRESHOLD_MB}m" -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$TEMP_ZIP"
+              else
+                zip -s "${THRESHOLD_MB}m" "${OUTPUT_DIR}/${BASENAME}.zip" "$TEMP_ZIP"
+              fi
+              
+              # Clean up
+              rm -f "$TEMP_ZIP"
+              
+              # Rename split files to have consistent naming
+              if [ -f "${OUTPUT_DIR}/${BASENAME}.z01" ]; then
+                mv "${OUTPUT_DIR}/${BASENAME}.z01" "${OUTPUT_DIR}/${BASENAME}.zip.001"
+              fi
+              if [ -f "${OUTPUT_DIR}/${BASENAME}.z02" ]; then
+                mv "${OUTPUT_DIR}/${BASENAME}.z02" "${OUTPUT_DIR}/${BASENAME}.zip.002"
+              fi
+              
+              echo "Created split parts in ${OUTPUT_DIR}/"
+            else
+              # Small file - just zip it
+              if [ -n "$PASSWORD" ]; then
+                zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+              else
+                zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+              fi
+            fi
+          }
+
           # Download torrent
           echo "Downloading torrent from: $MAGNET"
           download_torrent "$MAGNET" || echo "Failed to download torrent"
@@ -234,22 +246,25 @@ jobs:
               ARCHIVE_NAME="torrent_archive_$(date +%Y%m%d_%H%M%S)"
               FOLDER_NAME=$(get_unique_folder "downloads" "$ARCHIVE_NAME")
               mkdir -p "downloads/$FOLDER_NAME"
-              echo "Creating zip archive in folder: downloads/$FOLDER_NAME"
+              echo "Creating split archive in folder: downloads/$FOLDER_NAME"
               
-              # Create zip of all downloaded content
-              if [ -n "$ZIP_PASSWORD" ]; then
-                zip -r -P "$ZIP_PASSWORD" "downloads/$FOLDER_NAME/${ARCHIVE_NAME}.zip" tmp_downloads/*
-              else
-                zip -r "downloads/$FOLDER_NAME/${ARCHIVE_NAME}.zip" tmp_downloads/*
-              fi
-
+              # Create a single archive of all downloaded content
+              TEMP_TAR="/tmp/${ARCHIVE_NAME}.tar"
+              cd tmp_downloads
+              tar -cf "$TEMP_TAR" .
+              cd ..
+              
+              # Now split and compress the tar file
+              split_and_compress "$TEMP_TAR" "downloads/$FOLDER_NAME" "$ARCHIVE_NAME" "$ZIP_PASSWORD" "$SPLIT_THRESHOLD_MB"
+              
+              rm -f "$TEMP_TAR"
+              
+              # Count parts
+              PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/${ARCHIVE_NAME}.zip* 2>/dev/null | wc -l)
+              
               # Create README.md for zip mode
-              ZIP_SIZE=$(stat -c%s "downloads/$FOLDER_NAME/${ARCHIVE_NAME}.zip")
-              ZIP_SIZE_MB=$(echo "scale=2; $ZIP_SIZE / 1024 / 1024" | bc)
               FOLDER_ENCODED=$(echo "${FOLDER_NAME}" | sed 's/ /%20/g')
-              FILE_ENCODED=$(echo "${ARCHIVE_NAME}.zip" | sed 's/ /%20/g')
-              RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${FILE_ENCODED}"
-
+              
               {
                 echo "# ${ARCHIVE_NAME} - Torrent Archive"
                 echo ""
@@ -260,7 +275,7 @@ jobs:
                 echo "| Property | Value |"
                 echo "|----------|-------|"
                 echo "| **Archive Name** | \`${ARCHIVE_NAME}.zip\` |"
-                echo "| **Size** | ${ZIP_SIZE_MB} MB |"
+                echo "| **Parts** | ${PARTS_COUNT} |"
                 echo "| **Status** | **Complete (100%)** |"
                 if [ -n "$ZIP_PASSWORD" ]; then
                   echo "| **Password Protected** | **YES** |"
@@ -270,11 +285,37 @@ jobs:
                 echo ""
                 echo "---"
                 echo ""
-                echo "## Download Link"
+                echo "## Download Links"
                 echo ""
                 echo "| File | Link |"
                 echo "|------|------|"
-                echo "| \`${ARCHIVE_NAME}.zip\` | [Download](${RAW_LINK}) |"
+              } > "downloads/$FOLDER_NAME/README.md"
+              
+              for part_file in downloads/${FOLDER_NAME}/${ARCHIVE_NAME}.zip*; do
+                if [ -f "$part_file" ]; then
+                  PART_BASENAME=$(basename "$part_file")
+                  PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
+                  RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
+                  echo "| \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |" >> "downloads/$FOLDER_NAME/README.md"
+                fi
+              done
+              
+              {
+                echo ""
+                echo "---"
+                echo ""
+                echo "## How to Reassemble"
+                echo ""
+                echo "**Linux/Mac:**"
+                echo "\`\`\`bash"
+                echo "# Download all parts to the same directory"
+                echo "# Then run:"
+                echo "cat ${ARCHIVE_NAME}.zip.* > ${ARCHIVE_NAME}.zip"
+                echo "unzip ${ARCHIVE_NAME}.zip"
+                echo "\`\`\`"
+                echo ""
+                echo "**Windows:**"
+                echo "Download all parts, then use 7-Zip to extract the first part (.zip.001)"
                 echo ""
                 echo "---"
                 echo ""
@@ -287,61 +328,22 @@ jobs:
                 echo "---"
                 echo ""
                 echo "*This tool created by [avasam.ir](https://avasam.ir)*"
-              } > "downloads/$FOLDER_NAME/README.md"
+              } >> "downloads/$FOLDER_NAME/README.md"
             fi
             rm -rf tmp_downloads
           else
-            # Process each downloaded file/directory
-            find tmp_downloads -mindepth 1 -maxdepth 1 | while read -r ITEM; do
-              BASENAME=$(basename "$ITEM")
-              FOLDER_NAME=$(get_unique_folder "downloads" "$BASENAME")
+            # Normal mode - process each file individually
+            find tmp_downloads -type f ! -name "*.aria2" ! -name "*.torrent" | while read -r FILE; do
+              BASENAME=$(basename "$FILE")
+              BASENAME_NO_EXT="${BASENAME%.*}"
+              FOLDER_NAME=$(get_unique_folder "downloads" "$BASENAME_NO_EXT")
               mkdir -p "downloads/$FOLDER_NAME"
               
-              if [ -d "$ITEM" ]; then
-                # Handle directory
-                echo "Processing directory: $BASENAME"
-                if [ -n "$ZIP_PASSWORD" ]; then
-                  zip -r -P "$ZIP_PASSWORD" "downloads/${FOLDER_NAME}/${BASENAME}.zip" "$ITEM"
-                else
-                  zip -r "downloads/${FOLDER_NAME}/${BASENAME}.zip" "$ITEM"
-                fi
-                
-                # Check if zip needs splitting
-                ZIP_SIZE=$(stat -c%s "downloads/${FOLDER_NAME}/${BASENAME}.zip")
-                if [ "$ZIP_SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
-                  echo "Re-splitting ${BASENAME}.zip into ${SPLIT_THRESHOLD_MB}MB parts"
-                  mv "downloads/${FOLDER_NAME}/${BASENAME}.zip" "downloads/${FOLDER_NAME}/temp.zip"
-                  if [ -n "$ZIP_PASSWORD" ]; then
-                    zip -0 -s "${SPLIT_THRESHOLD_MB}m" -P "$ZIP_PASSWORD" "downloads/${FOLDER_NAME}/${BASENAME}.zip" "downloads/${FOLDER_NAME}/temp.zip"
-                  else
-                    zip -0 -s "${SPLIT_THRESHOLD_MB}m" "downloads/${FOLDER_NAME}/${BASENAME}.zip" "downloads/${FOLDER_NAME}/temp.zip"
-                  fi
-                  rm -f "downloads/${FOLDER_NAME}/temp.zip"
-                fi
-              else
-                # Handle single file
-                SIZE=$(stat -c%s "$ITEM")
-                echo "Processing file: $BASENAME (${SIZE} bytes)"
-                
-                if [ "$SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
-                  echo "$BASENAME is $(( SIZE / 1024 / 1024 ))MB - splitting into ${SPLIT_THRESHOLD_MB}MB parts"
-                  if [ -n "$ZIP_PASSWORD" ]; then
-                    zip -0 -s "${SPLIT_THRESHOLD_MB}m" -P "$ZIP_PASSWORD" "downloads/${FOLDER_NAME}/${BASENAME}.zip" -j "$ITEM"
-                  else
-                    zip -0 -s "${SPLIT_THRESHOLD_MB}m" "downloads/${FOLDER_NAME}/${BASENAME}.zip" -j "$ITEM"
-                  fi
-                else
-                  if [ -n "$ZIP_PASSWORD" ]; then
-                    zip -j -P "$ZIP_PASSWORD" "downloads/${FOLDER_NAME}/${BASENAME}.zip" "$ITEM"
-                  else
-                    zip -j "downloads/${FOLDER_NAME}/${BASENAME}.zip" "$ITEM"
-                  fi
-                fi
-              fi
+              split_and_compress "$FILE" "downloads/$FOLDER_NAME" "$BASENAME_NO_EXT" "$ZIP_PASSWORD" "$SPLIT_THRESHOLD_MB"
               
               # Create README for this item
               FOLDER_ENCODED=$(echo "${FOLDER_NAME}" | sed 's/ /%20/g')
-              PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/*.z* downloads/${FOLDER_NAME}/*.zip 2>/dev/null | wc -l)
+              PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/${BASENAME_NO_EXT}.zip* 2>/dev/null | wc -l)
               
               {
                 echo "# ${BASENAME} - Torrent Download"
@@ -352,7 +354,7 @@ jobs:
                 echo ""
                 echo "| Property | Value |"
                 echo "|----------|-------|"
-                echo "| **Original Item** | \`${BASENAME}\` |"
+                echo "| **Original File** | \`${BASENAME}\` |"
                 echo "| **Parts** | ${PARTS_COUNT} |"
                 echo "| **Status** | **Complete (100%)** |"
                 if [ -n "$ZIP_PASSWORD" ]; then
@@ -369,7 +371,7 @@ jobs:
                 echo "|------|------|"
               } > "downloads/${FOLDER_NAME}/README.md"
               
-              for part_file in "downloads/${FOLDER_NAME}/${BASENAME}".z* "downloads/${FOLDER_NAME}/${BASENAME}.zip"; do
+              for part_file in downloads/${FOLDER_NAME}/${BASENAME_NO_EXT}.zip*; do
                 if [ -f "$part_file" ]; then
                   PART_BASENAME=$(basename "$part_file")
                   PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
@@ -393,6 +395,77 @@ jobs:
                 echo "*This tool created by [avasam.ir](https://avasam.ir)*"
               } >> "downloads/${FOLDER_NAME}/README.md"
             done
+            
+            # Handle directories in normal mode
+            find tmp_downloads -mindepth 1 -maxdepth 1 -type d | while read -r DIR; do
+              DIRNAME=$(basename "$DIR")
+              FOLDER_NAME=$(get_unique_folder "downloads" "$DIRNAME")
+              mkdir -p "downloads/$FOLDER_NAME"
+              
+              # Create tar of directory then split
+              TEMP_TAR="/tmp/${DIRNAME}.tar"
+              cd "$DIR"
+              tar -cf "$TEMP_TAR" .
+              cd ../..
+              
+              split_and_compress "$TEMP_TAR" "downloads/$FOLDER_NAME" "$DIRNAME" "$ZIP_PASSWORD" "$SPLIT_THRESHOLD_MB"
+              rm -f "$TEMP_TAR"
+              
+              # Create README
+              FOLDER_ENCODED=$(echo "${FOLDER_NAME}" | sed 's/ /%20/g')
+              PARTS_COUNT=$(ls downloads/${FOLDER_NAME}/${DIRNAME}.zip* 2>/dev/null | wc -l)
+              
+              {
+                echo "# ${DIRNAME} - Torrent Download"
+                echo ""
+                echo "---"
+                echo ""
+                echo "## Download Information"
+                echo ""
+                echo "| Property | Value |"
+                echo "|----------|-------|"
+                echo "| **Original Directory** | \`${DIRNAME}\` |"
+                echo "| **Parts** | ${PARTS_COUNT} |"
+                echo "| **Status** | **Complete (100%)** |"
+                if [ -n "$ZIP_PASSWORD" ]; then
+                  echo "| **Password Protected** | **YES** |"
+                else
+                  echo "| **Password Protected** | **NO** |"
+                fi
+                echo ""
+                echo "---"
+                echo ""
+                echo "## Download Links"
+                echo ""
+                echo "| File | Link |"
+                echo "|------|------|"
+              } > "downloads/${FOLDER_NAME}/README.md"
+              
+              for part_file in downloads/${FOLDER_NAME}/${DIRNAME}.zip*; do
+                if [ -f "$part_file" ]; then
+                  PART_BASENAME=$(basename "$part_file")
+                  PART_ENCODED=$(echo "${PART_BASENAME}" | sed 's/ /%20/g')
+                  RAW_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/raw/${BRANCH}/downloads/${FOLDER_ENCODED}/${PART_ENCODED}"
+                  echo "| \`${PART_BASENAME}\` | [Download](${RAW_LINK}) |" >> "downloads/${FOLDER_NAME}/README.md"
+                fi
+              done
+              
+              {
+                echo ""
+                echo "---"
+                echo ""
+                echo "## Original Magnet Link"
+                echo ""
+                echo "\`\`\`"
+                echo "$MAGNET"
+                echo "\`\`\`"
+                echo ""
+                echo "---"
+                echo ""
+                echo "*This tool created by [avasam.ir](https://avasam.ir)*"
+              } >> "downloads/${FOLDER_NAME}/README.md"
+            done
+            
             rm -rf tmp_downloads
           fi
 
@@ -467,7 +540,7 @@ jobs:
 
           echo "README.md updated"
 
-      - name: Commit & Push in batches of 5 files (AVASAM)
+      - name: Commit & Push in batches of 5 files
         run: |
           BRANCH="${GITHUB_REF_NAME}"
           git config user.name "github-actions"
