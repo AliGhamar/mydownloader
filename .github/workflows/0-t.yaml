@@ -183,62 +183,59 @@ jobs:
           }
 
           split_file_into_parts() {
-            local INPUT_FILE="$1"
-            local OUTPUT_DIR="$2"
-            local BASENAME="$3"
-            local PASSWORD="$4"
-            local PART_SIZE_MB="$5"
-            
-            local FILE_SIZE=$(stat -c%s "$INPUT_FILE")
-            local FILE_SIZE_MB=$(( FILE_SIZE / 1024 / 1024 ))
-            
-            echo "Processing: $BASENAME (${FILE_SIZE_MB} MB)"
-            
-            if [ "$FILE_SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
-              echo "File exceeds ${PART_SIZE_MB}MB - splitting into parts"
-              
-              # Create a temporary directory for split files
-              local TEMP_DIR="${OUTPUT_DIR}/temp_split"
-              mkdir -p "$TEMP_DIR"
-              
-              # First, create a zip (with or without password)
-              local TEMP_ZIP="${TEMP_DIR}/${BASENAME}.zip"
-              if [ -n "$PASSWORD" ]; then
-                zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE"
-              else
-                zip -j "$TEMP_ZIP" "$INPUT_FILE"
-              fi
-              
-              # Split the zip file using split command
-              cd "$TEMP_DIR"
-              split -b "${PART_SIZE_MB}M" "${BASENAME}.zip" "${BASENAME}.zip.part."
-              
-              # Move split parts to OUTPUT_DIR with proper naming
-              local PART_NUM=1
-              for part in ${BASENAME}.zip.part.*; do
-                if [ -f "$part" ]; then
-                  printf -v PART_NUM_PADDED "%03d" $PART_NUM
-                  mv "$part" "${OUTPUT_DIR}/${BASENAME}.zip.${PART_NUM_PADDED}"
-                  PART_NUM=$((PART_NUM + 1))
-                fi
-              done
-              
-              cd - > /dev/null
-              
-              # Clean up temp directory
-              rm -rf "$TEMP_DIR"
-              
-              echo "Created $(ls ${OUTPUT_DIR}/${BASENAME}.zip.* 2>/dev/null | wc -l) parts"
-            else
-              # Small file - just zip it
-              echo "File under ${PART_SIZE_MB}MB - creating single zip"
-              if [ -n "$PASSWORD" ]; then
-                zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
-              else
-                zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
-              fi
-            fi
-          }
+                    local INPUT_FILE="$1"
+                    local OUTPUT_DIR="$2"
+                    local BASENAME="$3"
+                    local PASSWORD="$4"
+                    local PART_SIZE_MB="$5"
+                    
+                    local FILE_SIZE=$(stat -c%s "$INPUT_FILE")
+                    local FILE_SIZE_MB=$(( FILE_SIZE / 1024 / 1024 ))
+                    
+                    echo "Processing: $BASENAME (${FILE_SIZE_MB} MB)"
+                    
+                    if [ "$FILE_SIZE" -gt "$SPLIT_THRESHOLD_BYTES" ]; then
+                      echo "File exceeds ${PART_SIZE_MB}MB - splitting into parts"
+                      
+                      # Create a temporary directory for split files
+                      local TEMP_DIR="${OUTPUT_DIR}/temp_split"
+                      mkdir -p "$TEMP_DIR"
+                      
+                      # First, create a zip (with or without password)
+                      local TEMP_ZIP="${TEMP_DIR}/${BASENAME}.zip"
+                      if [ -n "$PASSWORD" ]; then
+                        zip -j -P "$PASSWORD" "$TEMP_ZIP" "$INPUT_FILE"
+                      else
+                        zip -j "$TEMP_ZIP" "$INPUT_FILE"
+                      fi
+                      
+                      # Split the zip file using split command (no cd, use full paths)
+                      split -b "${PART_SIZE_MB}M" "$TEMP_ZIP" "${TEMP_DIR}/${BASENAME}.zip.part."
+                      
+                      # Rename split parts to .001, .002, etc. and move to OUTPUT_DIR
+                      local PART_NUM=1
+                      for part in "${TEMP_DIR}/${BASENAME}.zip.part."*; do
+                        if [ -f "$part" ]; then
+                          printf -v PART_NUM_PADDED "%03d" $PART_NUM
+                          mv "$part" "${OUTPUT_DIR}/${BASENAME}.zip.${PART_NUM_PADDED}"
+                          PART_NUM=$((PART_NUM + 1))
+                        fi
+                      done
+                      
+                      # Clean up temp directory
+                      rm -rf "$TEMP_DIR"
+                      
+                      echo "Created $(ls ${OUTPUT_DIR}/${BASENAME}.zip.* 2>/dev/null | wc -l) parts"
+                    else
+                      # Small file - just zip it
+                      echo "File under ${PART_SIZE_MB}MB - creating single zip"
+                      if [ -n "$PASSWORD" ]; then
+                        zip -j -P "$PASSWORD" "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+                      else
+                        zip -j "${OUTPUT_DIR}/${BASENAME}.zip" "$INPUT_FILE"
+                      fi
+                    fi
+                  }
 
           # Download torrent
           echo "Downloading torrent from: $MAGNET"
