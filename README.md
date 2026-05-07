@@ -74,11 +74,6 @@ https://github.com/nikzad-avasam/youtube-dl
 
 ---
 
-## فایل های دانلود شده از تورنت در گیتهاب شما :
-
-1. [torrent_archive_20260507_011053](https://github.com/AliGhamar/mydownloader/tree/main/downloads/torrent_archive_20260507_011053)
-
----
 
 ---
 
@@ -87,5 +82,15 @@ https://github.com/nikzad-avasam/youtube-dl
 1. [DNSTT-Client-v2.1.0-Windows](https://github.com/AliGhamar/mydownloader/tree/main/downloads/DNSTT-Client-v2.1.0-Windows)
 
 2. [torrent_archive_20260507_011053](https://github.com/AliGhamar/mydownloader/tree/main/downloads/torrent_archive_20260507_011053)
+
+---
+
+---
+
+## فایل های دانلود شده از تورنت در گیتهاب شما :
+
+1. [DNSTT-Client-v2.1.0-Windows](https://github.com/AliGhamar/mydownloader/tree/main/downloads/DNSTT-Client-v2.1.0-Windows)
+
+2. [torrent_archive_20260507_210641](https://github.com/AliGhamar/mydownloader/tree/main/downloads/torrent_archive_20260507_210641)
 
 ---
